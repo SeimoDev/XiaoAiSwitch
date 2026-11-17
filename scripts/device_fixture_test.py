@@ -31,7 +31,10 @@ def main():
     parser.add_argument("--delegate", choices=["image", "control"])
     parser.add_argument("--previous", action="store_true")
     parser.add_argument("--registry", action="store_true")
+    parser.add_argument("--system", action="store_true", help="Exercise the installed clock app's real launcher entry.")
     args = parser.parse_args()
+    if args.system and (args.route != "chat" or args.delegate or args.microphone or args.default_route not in (None, "chat")):
+        parser.error("--system requires a standalone chat request")
     if args.manual_microphone:
         args.microphone = True
     directory = ROOT / "evidence"
@@ -69,6 +72,9 @@ def main():
                            "model": "FIXTURE_" + args.route.upper(), "systemPrompt": "FIXTURE_" + args.route.upper() + "_PROMPT"}}
     if args.steps is not None:
         config["controlSteps"] = args.steps
+    if args.system:
+        config.update(systemTools=True, autoRoute=False)
+        config["chat"]["model"] = "FIXTURE_SYSTEM"
     if args.delegate:
         config["autoRoute"] = True
         config[args.route]["endpoint"] = "http://127.0.0.1:8765/planner/v1"
@@ -136,6 +142,24 @@ def main():
         request = json.loads(observed[before])
         assert request["fixture_token_matches"], "Authorization did not reach fixture"
         assert request["body"]["model"] == config[args.route]["model"]
+        if args.system:
+            assert {tool["function"]["name"] for tool in request["body"]["tools"]} == {"launch_app", "set_alarm", "start_timer"}
+            prompt = request["body"]["messages"][0]["content"]
+            assert prompt.startswith("FIXTURE_CHAT_PROMPT\n\n") and "根据工具结果" in prompt
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                observed = [json.loads(line) for line in records.read_text(encoding="utf-8").splitlines()[before:]]
+                if len(observed) >= 2:
+                    break
+                time.sleep(.2)
+            assert len(observed) >= 2, "System tool result did not reach the model"
+            tool = observed[1]["body"]["messages"][-1]
+            assert tool["role"] == "tool" and tool["tool_call_id"] == "LAUNCH_CLOCK"
+            assert json.loads(tool["content"])["ok"], tool
+            foreground = adb("shell", "dumpsys", "activity", "activities").decode("utf-8")
+            assert any("topResumedActivity" in line and "com.android.deskclock/" in line for line in foreground.splitlines()), "Clock not in foreground"
+            print(json.dumps({"passed": True, "route": "system", "tool": "launch_app", "clock_in_foreground": True}))
+            return
         if args.delegate:
             assert request["path"] == "/planner/v1/chat/completions"
             assert request["body"]["messages"][0]["content"] == config[args.route]["systemPrompt"]
@@ -301,12 +325,16 @@ def main():
         print(json.dumps({"passed": True, "route": args.route, "model": request["body"]["model"],
                           "path": request["path"], "ui": args.name, "preview": args.preview}, ensure_ascii=False))
     finally:
-        directory.joinpath(args.name + "-status.xml").write_bytes(root(f"cat /data/user/0/{app}/shared_prefs/switch.xml"))
-        adb("shell", "am", "force-stop", app)
-        path.write_bytes(backup)
-        adb("push", str(path), "/data/local/tmp/xa-current-prefs.xml")
-        adb("shell", "run-as", app, "cp", "/data/local/tmp/xa-current-prefs.xml", "shared_prefs/switch.xml")
-        adb("reverse", "--remove", "tcp:8765")
+        try:
+            directory.joinpath(args.name + "-status.xml").write_bytes(root(f"cat /data/user/0/{app}/shared_prefs/switch.xml"))
+            adb("shell", "am", "force-stop", app)
+            path.write_bytes(backup)
+            adb("push", str(path), "/data/local/tmp/xa-current-prefs.xml")
+            adb("shell", "run-as", app, "cp", "/data/local/tmp/xa-current-prefs.xml", "shared_prefs/switch.xml")
+        finally:
+            path.unlink(missing_ok=True)
+            adb("shell", "rm", "-f", "/data/local/tmp/xa-current-prefs.xml")
+            adb("reverse", "--remove", "tcp:8765")
 
 
 if __name__ == "__main__":

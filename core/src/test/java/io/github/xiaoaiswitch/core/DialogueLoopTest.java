@@ -11,10 +11,36 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class DialogueLoopTest {
+    @Test public void duplicateSystemCallIsNotDispatchedAndFailureGoesBackToTheModel() throws Exception {
+        Profile profile = Profile.parse(new JSONObject().put("model", "DIALOGUE"));
+        DialogueProtocol.Tools tools = new DialogueProtocol.Tools(false, false, true);
+        JSONObject request = DialogueProtocol.request(profile, new JSONArray(), "打开不存在的应用", List.of(), tools);
+        AtomicInteger actions = new AtomicInteger();
+        AtomicInteger requests = new AtomicInteger();
+        DialogueLoop.Result result = DialogueLoop.run(profile, request, tools, task -> {
+            actions.incrementAndGet();
+            assertEquals(new SystemTools.Launch("不存在的应用"), task.systemAction());
+            return new DialogueLoop.Result("没有找到应用", List.of(), false);
+        }, () -> true, new ModelClient.Cancellation(), (active, input, cancel) -> {
+            int call = requests.incrementAndGet();
+            if (call > 1) {
+                JSONArray messages = input.getJSONArray("messages");
+                JSONObject last = new JSONObject(messages.getJSONObject(messages.length() - 1).getString("content"));
+                assertFalse(last.getBoolean("ok"));
+                assertEquals("没有找到应用", last.getString("message"));
+            }
+            return call == 3 ? new JSONObject("{\"choices\":[{\"message\":{\"content\":\"没有找到应用\"}}]}")
+                    : DialogueProtocolTest.response("launch_app", new JSONObject().put("app_name", "不存在的应用"));
+        });
+        assertEquals(1, actions.get());
+        assertEquals("没有找到应用", result.text());
+    }
+
     @Test public void delegationMayContinuePastFourModelCallsUntilFinalAnswer() throws Exception {
         Profile profile = Profile.parse(new JSONObject().put("model", "PLANNER"));
         JSONObject request = DialogueProtocol.request(profile, new JSONArray(), "生成图像", "", true, false);

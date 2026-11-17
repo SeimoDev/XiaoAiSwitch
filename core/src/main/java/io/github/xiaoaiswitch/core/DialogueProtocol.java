@@ -8,35 +8,46 @@ import org.json.JSONObject;
 public final class DialogueProtocol {
     private DialogueProtocol() {}
 
-    public record Task(String id, String route, String text, String image) {}
+    public record Tools(boolean images, boolean control, boolean system) {}
+    public record Task(String id, String route, String text, String image, SystemTools.Action systemAction) {}
 
     public static JSONObject request(Profile profile, JSONArray history, String text, String image, boolean images, boolean control) {
         return request(profile, history, text, image.isEmpty() ? java.util.Collections.emptyList() : java.util.Collections.singletonList(image), images, control);
     }
 
     public static JSONObject request(Profile profile, JSONArray history, String text, List<String> attachments, boolean images, boolean control) {
-        JSONObject request = ChatProtocol.request(profile, history, text);
+        return request(profile, history, text, attachments, new Tools(images, control, false));
+    }
+    public static JSONObject request(Profile profile, JSONArray history, String text, List<String> attachments, Tools enabled) {
+        String prompt = profile.systemPrompt();
+        if (enabled.system()) prompt = prompt.isEmpty() ? SystemTools.PROMPT : prompt + "\n\n" + SystemTools.PROMPT;
+        JSONObject request = ChatProtocol.request(profile, history, text, prompt);
         if (!attachments.isEmpty()) {
             JSONArray messages = request.getJSONArray("messages");
             messages.put(messages.length() - 1, ControlProtocol.visualMessage(text, attachments));
         }
         JSONArray tools = new JSONArray();
-        if (images) tools.put(new JSONObject().put("type", "function").put("function", new JSONObject()
+        if (enabled.images()) tools.put(new JSONObject().put("type", "function").put("function", new JSONObject()
                 .put("name", "generate_image").put("description", "当用户要求画图或修改图片时调用绘图模型。input 表示修改本次附件，previous 表示修改上次生成的图，none 表示文生图。")
                 .put("parameters", new JSONObject().put("type", "object").put("properties", new JSONObject()
                         .put("prompt", new JSONObject().put("type", "string"))
                         .put("image", new JSONObject().put("type", "string").put("enum", new JSONArray().put("none").put("input").put("previous"))))
                         .put("required", new JSONArray().put("prompt")).put("additionalProperties", false))));
-        if (control) tools.put(new JSONObject().put("type", "function").put("function", new JSONObject()
+        if (enabled.control()) tools.put(new JSONObject().put("type", "function").put("function", new JSONObject()
                 .put("name", "control_phone").put("description", "用户要求实际操作手机或应用时，把完整任务交给手机控制模型执行；普通知识问答不需要此工具。")
                 .put("parameters", new JSONObject().put("type", "object").put("properties", new JSONObject()
                         .put("task", new JSONObject().put("type", "string")))
                         .put("required", new JSONArray().put("task")).put("additionalProperties", false))));
+        if (enabled.system()) SystemTools.addTo(tools);
         if (tools.length() > 0) request.put("tools", tools).put("tool_choice", "auto");
         return request;
     }
 
     public static List<Task> tasks(JSONObject response, boolean images, boolean control) {
+        return tasks(response, new Tools(images, control, false));
+    }
+
+    public static List<Task> tasks(JSONObject response, Tools enabled) {
         if (response.has("error")) throw new IllegalArgumentException("对话模型返回错误");
         JSONObject message = response.getJSONArray("choices").getJSONObject(0).getJSONObject("message");
         JSONArray calls = message.optJSONArray("tool_calls");
@@ -48,16 +59,21 @@ public final class DialogueProtocol {
             JSONObject function = call.getJSONObject("function");
             JSONObject arguments = new JSONObject(string(function, "arguments"));
             String name = string(function, "name");
-            if (name.equals("generate_image") && images) {
+            if (name.equals("generate_image") && enabled.images()) {
                 String image = arguments.has("image") ? string(arguments, "image") : "none";
                 if (!image.equals("none") && !image.equals("input") && !image.equals("previous")) {
                     throw new IllegalArgumentException("未知图片引用");
                 }
-                result.add(new Task(id, "image", string(arguments, "prompt"), image));
+                result.add(new Task(id, "image", string(arguments, "prompt"), image, null));
                 continue;
             }
-            if (name.equals("control_phone") && control) {
-                result.add(new Task(id, "control", string(arguments, "task"), "none"));
+            if (name.equals("control_phone") && enabled.control()) {
+                result.add(new Task(id, "control", string(arguments, "task"), "none", null));
+                continue;
+            }
+            SystemTools.Action action = enabled.system() ? SystemTools.parse(name, arguments) : null;
+            if (action != null) {
+                result.add(new Task(id, "system", "", "none", action));
                 continue;
             }
             throw new IllegalArgumentException("对话模型请求了未知或未启用的工具");

@@ -35,6 +35,34 @@ public class DialogueProtocolTest {
         assertFalse(DialogueProtocol.request(profile, new JSONArray(), "你好", "", false, false).has("tools"));
     }
 
+    @Test public void addsOnlyEnabledSystemToolsAndKeepsUserPrompt() {
+        DialogueProtocol.Tools system = new DialogueProtocol.Tools(false, false, true);
+        JSONObject request = DialogueProtocol.request(profile, new JSONArray(), "设一个五分钟计时", List.of(), system);
+        String prompt = request.getJSONArray("messages").getJSONObject(0).getString("content");
+        assertTrue(prompt.startsWith("MY_SYSTEM\n\n"));
+        assertTrue(prompt.contains("start_timer"));
+        assertTrue(prompt.contains("根据工具结果"));
+        assertEquals(prompt, CodexProtocol.request(request).getString("instructions"));
+        assertEquals(3, request.getJSONArray("tools").length());
+        assertEquals("start_timer", request.getJSONArray("tools").getJSONObject(1).getJSONObject("function").getString("name"));
+    }
+
+    @Test public void parsesBoundedTypedSystemToolsAndRejectsUnexpectedParameters() {
+        DialogueProtocol.Tools system = new DialogueProtocol.Tools(false, false, true);
+        JSONObject timer = response("start_timer", new JSONObject().put("seconds", 300));
+        assertEquals(new SystemTools.Timer(300, ""), DialogueProtocol.tasks(timer, system).get(0).systemAction());
+        assertEquals(new SystemTools.Alarm(7, 30, "起床"), DialogueProtocol.tasks(response("set_alarm",
+                new JSONObject().put("hour", 7).put("minute", 30).put("label", "起床")), system).get(0).systemAction());
+        assertEquals(new SystemTools.Launch("时钟"), DialogueProtocol.tasks(response("launch_app",
+                new JSONObject().put("app_name", " 时钟 ")), system).get(0).systemAction());
+        assertThrows(IllegalArgumentException.class, () -> DialogueProtocol.tasks(timer, false, false));
+        assertThrows(IllegalArgumentException.class, () -> DialogueProtocol.tasks(response("set_alarm", new JSONObject().put("hour", 24).put("minute", 0)), system));
+        assertThrows(IllegalArgumentException.class, () -> DialogueProtocol.tasks(response("start_timer", new JSONObject().put("seconds", 2.5)), system));
+        assertThrows(IllegalArgumentException.class, () -> DialogueProtocol.tasks(response("start_timer", new JSONObject().put("seconds", 86401)), system));
+        assertThrows(IllegalArgumentException.class, () -> DialogueProtocol.tasks(response("launch_app",
+                new JSONObject().put("app_name", "时钟").put("uri", "https://example.com")), system));
+    }
+
     @Test public void includesAttachedImageAsAnImagePartRatherThanAnOpaqueCloudFileId() {
         JSONObject request = DialogueProtocol.request(profile, new JSONArray(), "改成蓝色", "data:image/png;base64,AQID", true, false);
         JSONArray content = request.getJSONArray("messages").getJSONObject(1).getJSONArray("content");

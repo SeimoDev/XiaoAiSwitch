@@ -226,6 +226,8 @@ private fun SettingsScreen() {
         Column(verticalArrangement = Arrangement.spacedBy(26.dp)) {
             Section("运行方式") {
                 SwitchRow("自动分流", "对话可调用已启用的绘图与控制源", config.optBoolean("autoRoute", true), "auto_route_switch") { update("autoRoute", it) }
+                SwitchRow("系统工具", "文本和语音可打开应用、设置闹钟或倒计时，不依赖屏幕控制",
+                    config.optBoolean("systemTools", false), "system_tools_switch") { update("systemTools", it) }
                 ChoiceRow("普通输入默认通道", routeNames[SettingsConfig.ROUTES.indexOf(config.optString("defaultRoute", "chat")).coerceAtLeast(0)],
                     "default_route") { chooser = "default" }
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -366,7 +368,7 @@ private fun SettingsScreen() {
                                     }
                                 }
                                 Section("设置") {
-                                    ChoiceRow("通用设置", "默认通道、自动分流与控制预算", "menu_general") { page = "general"; message = null }
+                                    ChoiceRow("通用设置", "默认通道、系统工具与控制预算", "menu_general") { page = "general"; message = null }
                                     ChoiceRow("AI Provider", "${providers.size} 个 · 统一管理服务与登录", "menu_providers") {
                                         providerReturn = "home"; page = "providers"; message = null
                                     }

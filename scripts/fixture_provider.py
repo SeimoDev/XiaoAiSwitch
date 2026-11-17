@@ -121,7 +121,14 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/failure/"):
             self.send_error(401, "fixture auth failure")
             return
-        if body.get("model") == "FIXTURE_VISION":
+        if body.get("model") == "FIXTURE_SYSTEM":
+            if any(message.get("role") == "tool" for message in body["messages"]):
+                result = {"choices": [{"message": {"role": "assistant", "content": "SYSTEM_TOOL_FIXTURE_OK"}}]}
+            else:
+                result = {"choices": [{"message": {"role": "assistant", "tool_calls": [
+                    {"id": "LAUNCH_CLOCK", "type": "function", "function": {
+                        "name": "launch_app", "arguments": json.dumps({"app_name": "时钟"})}}]}}]}
+        elif body.get("model") == "FIXTURE_VISION":
             result = {"choices": [{"message": {"role": "assistant", "content": "VISION_FIXTURE_OK"}}]}
         elif body.get("messages", [{}])[-1].get("content") == "VISION_ENGINE_SEED":
             result = {"choices": [{"message": {"role": "assistant", "content": "VISION_SEED_OK"}}]}

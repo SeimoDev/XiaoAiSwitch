@@ -11,6 +11,7 @@ public final class SettingsConfig {
     public static JSONObject save(JSONObject draft, long revision) {
         JSONObject result = new JSONObject(draft.toString());
         result.put("enabled", flag(draft, "enabled", false)).put("autoRoute", flag(draft, "autoRoute", true));
+        result.put("systemTools", flag(draft, "systemTools", false));
         String route = draft.optString("defaultRoute", "chat");
         if (!ROUTES.contains(route)) throw new IllegalArgumentException("请选择有效的默认通道");
         Object steps = draft.opt("controlSteps");

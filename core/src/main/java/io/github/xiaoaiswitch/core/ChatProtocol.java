@@ -7,8 +7,12 @@ public final class ChatProtocol {
     private ChatProtocol() {}
 
     public static JSONObject request(Profile profile, JSONArray history, String text) {
+        return request(profile, history, text, profile.systemPrompt());
+    }
+
+    static JSONObject request(Profile profile, JSONArray history, String text, String prompt) {
         JSONArray messages = new JSONArray();
-        if (!profile.systemPrompt().isEmpty()) messages.put(message("system", profile.systemPrompt()));
+        if (!prompt.isEmpty()) messages.put(message("system", prompt));
         for (int index = 0; index < history.length(); index++) messages.put(history.getJSONObject(index));
         messages.put(message("user", text));
         return new JSONObject().put("model", profile.model()).put("stream", false).put("messages", messages);

@@ -469,11 +469,14 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     boolean auto = !route.equals("vision") && config.optBoolean("autoRoute", true);
                     boolean imageTool = auto && imageProfile.enabled();
                     boolean controlTool = auto && adapter.phoneControl() && controlProfile.enabled();
+                    boolean systemTools = (route.equals("chat") || route.equals("voice")) && config.optBoolean("systemTools", false);
+                    DialogueProtocol.Tools tools = new DialogueProtocol.Tools(imageTool, controlTool, systemTools);
                     List<String> attachments = new ArrayList<>();
                     for (ModelClient.Image image : attached) attachments.add(ImageBridge.dataUrl(image));
-                    JSONObject body = DialogueProtocol.request(profile, prior, text, attachments, imageTool, controlTool);
-                    DialogueLoop.Result result = DialogueLoop.run(profile, body, imageTool, controlTool, task -> {
+                    JSONObject body = DialogueProtocol.request(profile, prior, text, attachments, tools);
+                    DialogueLoop.Result result = DialogueLoop.run(profile, body, tools, task -> {
                         requireCurrent(request, config);
+                        if (task.systemAction() != null) return SystemActionExecutor.execute(context, task.systemAction());
                         if (task.route().equals("control")) {
                             return new DialogueLoop.Result(control(config, controlProfile, task.text(), request, cancellation), Collections.emptyList());
                         }

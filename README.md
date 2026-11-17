@@ -22,6 +22,7 @@
 - **识图**：可为小爱的图片问答单独选择支持图片输入的模型。绘图和图生图仍使用「绘图」配置。
 - **绘图**：支持文生图、原图编辑和放大预览。可用独立图片 API，或直接使用 Codex 订阅绘图。
 - **手机控制**：支持截图、点击、滑动和输入；沿用原厂 AI 智控权限和全局光效，可随时停止。
+- **系统工具**：文本与语音可打开已安装的应用、提交单次闹钟和倒计时，不依赖屏幕控制。
 
 ## 兼容性
 
@@ -52,6 +53,7 @@
 | Model / System Prompt | 每个通道和模式独立选择。兼容对话源发送 `role: system`；绘图使用提示词前缀。 |
 | 识图 | 在首页进入「识图」，启用并选择支持图片输入的模型。之后在小爱的图片问答入口添加照片。未启用时保留原厂识图。 |
 | 默认通道 / 自动分流 | 在通用设置配置。自动分流没有固定调用上限；模型给出最终答复或任务取消时结束。也可用 `/chat 文本`、`/voice 文本`、`/draw 描述`、`/control 任务` 显式切换。 |
+| 系统工具 | 在「通用设置」单独开启。启用时自动在你的 System Prompt 后加入工具说明；时钟动作的实际状态以系统时钟为准。 |
 | 手机控制 | 模型需支持图像和工具调用；可在通用设置填写调用上限（正整数，默认 12 次），达到后自动停止。也可手动中止。 |
 
 ## 从源码构建
@@ -77,6 +79,7 @@ adb -s SERIAL install -r app/build/outputs/apk/debug/app-debug.apk
 - [贡献指南](CONTRIBUTING.md) · [问题反馈](https://github.com/SeimoDev/XiaoAiSwitch/issues)
 - [AI Provider 注册表](analysis/provider-registry.md) · [默认与思考模式](analysis/thinking-modes.md) · [Codex 订阅绘图](analysis/codex-images.md)
 - [新旧版识图适配](analysis/vision-native-pipeline.md)
+- [原厂系统工具链路](analysis/native-system-tools.md)
 - [小爱 AIVS 协议](https://developers.xiaoai.mi.com/documents/Home?type=%2Fapi%2Fdoc%2Frender_markdown%2FVoiceserviceAccess%2FDevice%2Fdevelop%2FProtocolDocument%2FEndpointOverview) · [LSPosed 模块作用域](https://github.com/LSPosed/LSPosed/wiki/Module-Scope)
 
 ## 开源协议
