@@ -4,7 +4,7 @@
 
 [![开源协议：GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?logo=gnu)](LICENSE)
 [![Android 构建状态](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml/badge.svg?branch=dev)](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml)
-[![源码版本：0.10.6](https://img.shields.io/badge/version-0.10.6-blue)](app/build.gradle)
+[![源码版本：0.10.7](https://img.shields.io/badge/version-0.10.7-blue)](app/build.gradle)
 [![Android API 27+](https://img.shields.io/badge/Android-API%2027%2B-3DDC84?logo=android&logoColor=white)](#兼容性)
 [![LSPosed 模块](https://img.shields.io/badge/LSPosed-Xposed%20API%2082-orange)](#兼容性)
 [![GitHub Stars](https://img.shields.io/github/stars/SeimoDev/XiaoAiSwitch?logo=github)](https://github.com/SeimoDev/XiaoAiSwitch/stargazers)
@@ -18,11 +18,12 @@
 ## 功能
 
 - **模型管理**：兼容 OpenAI API，也支持在手机独立登录并直连 Codex 订阅。文本和语音的默认／思考模式可分别选模型和提示词。
-- **文本与语音**：文本回答使用原生 Markdown 排版；语音保留小爱的语音识别和 TTS，包括已验证的 8.2 双工语音入口。
+- **文本与语音**：流式服务的回答逐段出现在原生 Markdown 卡片上；语音保留小爱的语音识别和 TTS，包括 8.2 双工语音入口。
 - **识图**：可为小爱的图片问答单独选择支持图片输入的模型。绘图和图生图仍使用「绘图」配置。
 - **绘图**：支持文生图、原图编辑和放大预览。可用独立图片 API，或直接使用 Codex 订阅绘图。
 - **手机控制**：支持截图、点击、滑动和输入；沿用原厂 AI 智控权限和全局光效，可随时停止。
 - **系统工具**：文本与语音可打开已安装的应用、提交单次闹钟和倒计时，不依赖屏幕控制。
+- **原厂全局记忆**：8.2 的明确记忆命令（如“请记住……”或“查一下我的记忆……”）由原厂小爱处理，普通对话仍走自选模型。
 
 ## 兼容性
 
@@ -54,6 +55,7 @@
 | 识图 | 在首页进入「识图」，启用并选择支持图片输入的模型。之后在小爱的图片问答入口添加照片。未启用时保留原厂识图。 |
 | 默认通道 / 自动分流 | 在通用设置配置。自动分流没有固定调用上限；模型给出最终答复或任务取消时结束。也可用 `/chat 文本`、`/voice 文本`、`/draw 描述`、`/control 任务` 显式切换。 |
 | 系统工具 | 在「通用设置」单独开启。启用时自动在你的 System Prompt 后加入工具说明；时钟动作的实际状态以系统时钟为准。 |
+| 原厂全局记忆 | 在「通用设置」查看开关和原厂记忆设置。可用 `/memory 请求` 明确指定原厂处理；模块不把原厂记忆条目交给自选 Provider。 |
 | 手机控制 | 模型需支持图像和工具调用；手机需解锁，并通过原厂屏幕授权。可在通用设置填写调用上限（正整数，默认 12 次），达到后自动停止，也可手动中止。 |
 
 ## 从源码构建
@@ -80,6 +82,7 @@ adb -s SERIAL install -r app/build/outputs/apk/debug/app-debug.apk
 - [AI Provider 注册表](analysis/provider-registry.md) · [默认与思考模式](analysis/thinking-modes.md) · [Codex 订阅绘图](analysis/codex-images.md)
 - [新旧版识图适配](analysis/vision-native-pipeline.md)
 - [原厂系统工具链路](analysis/native-system-tools.md)
+- [原生流式卡片](analysis/native-streaming.md) · [原厂全局记忆](analysis/xiaoai-global-memory.md)
 - [小爱 AIVS 协议](https://developers.xiaoai.mi.com/documents/Home?type=%2Fapi%2Fdoc%2Frender_markdown%2FVoiceserviceAccess%2FDevice%2Fdevelop%2FProtocolDocument%2FEndpointOverview) · [LSPosed 模块作用域](https://github.com/LSPosed/LSPosed/wiki/Module-Scope)
 
 ## 开源协议

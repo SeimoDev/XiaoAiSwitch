@@ -7,7 +7,7 @@ import java.lang.reflect.Modifier;
 /** Raw DEX symbols for supported assistant builds, not JADX-generated aliases. */
 record AssistantVersion(
         Engine engine, Images images, Markdown markdown, String dialogContext, String thinkingState, String duplexState,
-        boolean phoneControl, ControlBackend controlBackend) {
+        boolean phoneControl, ControlBackend controlBackend, String nativeQuery) {
     record Engine(String type, String post, String receive, String deliver, String handler,
                   String session, String tts, String ttsCallback) {
         boolean matches(ClassLoader loader, Class<?> event, Class<?> instruction, Class<?> handlerType) {
@@ -40,7 +40,7 @@ record AssistantVersion(
             new Engine("b30.o0", "u0", "y0", "W", "y", "b30.g", "b30.z0", "s10.b"),
             new Images("vf0.a", "m20.z0", "fc0.l1$b", "gb0.a"),
             new Markdown("sd0.od", "g0", "h0", "com.xiaomi.voiceassistant.card.i", "nj0.c"),
-            "com.xiaomi.voiceassist.engine.context.b", "ti0.h", null, true, null);
+            "com.xiaomi.voiceassist.engine.context.b", "ti0.h", null, true, null, null);
 
     private static final AssistantVersion V8 = new AssistantVersion(
             new Engine("p31.o0", "D0", "H0", "b0", "y", "p31.g", "p31.e1", "g21.a"),
@@ -48,7 +48,7 @@ record AssistantVersion(
             new Markdown("zg1.jf", "i0", "k0", "com.xiaomi.voiceassistant.card.k", "wn1.d"),
             "com.xiaomi.voiceassist.engine.context.j0", "zm1.k", "a41.g", true,
             new ControlBackend("com.xiaomi.voiceassistant.utils.o6", "ws1.b$f", "u62.g", "r21.e", "r21.t",
-                    "com.xiaomi.voiceassistant.utils.ba", "com.xiaomi.voiceassist.baselibrary.utils.h0"));
+                    "com.xiaomi.voiceassistant.utils.ba", "com.xiaomi.voiceassist.baselibrary.utils.h0"), "x51.m0");
 
     static AssistantVersion forCode(int versionCode) {
         return switch (versionCode) {

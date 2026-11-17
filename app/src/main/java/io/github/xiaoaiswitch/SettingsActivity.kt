@@ -83,7 +83,9 @@ private fun SettingsScreen() {
     val context = LocalContext.current
     val appName = stringResource(R.string.app_name)
     val assistant = remember(context) { runCatching { context.packageManager.getPackageInfo("com.miui.voiceassist", 0) }.getOrNull() }
-    val customControlSupported = assistant?.let { AssistantVersion.forCode(it.versionCode)?.phoneControl() } == true
+    val assistantAdapter = assistant?.let { AssistantVersion.forCode(it.versionCode) }
+    val customControlSupported = assistantAdapter?.phoneControl() == true
+    val nativeMemorySupported = assistantAdapter?.nativeQuery() != null
     val preferences = remember { context.getSharedPreferences("switch", 0) }
     val initial = remember { runCatching { AiProviders.normalize(JSONObject(preferences.getString("config", "{}") ?: "{}")).toString() }.getOrDefault("{}") }
     var draft by rememberSaveable { mutableStateOf(initial) }
@@ -228,6 +230,14 @@ private fun SettingsScreen() {
                 SwitchRow("自动分流", "对话可调用已启用的绘图与控制源", config.optBoolean("autoRoute", true), "auto_route_switch") { update("autoRoute", it) }
                 SwitchRow("系统工具", "文本和语音可打开应用、设置闹钟或倒计时，不依赖屏幕控制",
                     config.optBoolean("systemTools", false), "system_tools_switch") { update("systemTools", it) }
+                if (nativeMemorySupported) {
+                    SwitchRow("原厂全局记忆", "明确的记忆命令交给小爱，不读取或发送原厂记忆给第三方模型",
+                        config.optBoolean("nativeMemory", true), "native_memory_switch") { update("nativeMemory", it) }
+                    ChoiceRow("原厂记忆设置", "在小爱里管理和同步", "native_memory_settings") {
+                        val intent = Intent().setClassName("com.miui.voiceassist", "com.xiaomi.voiceassistant.settings.MemorySettingActivity")
+                        runCatching { context.startActivity(intent) }.onFailure { notifySave("原厂记忆设置未打开", true) }
+                    }
+                }
                 ChoiceRow("普通输入默认通道", routeNames[SettingsConfig.ROUTES.indexOf(config.optString("defaultRoute", "chat")).coerceAtLeast(0)],
                     "default_route") { chooser = "default" }
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {

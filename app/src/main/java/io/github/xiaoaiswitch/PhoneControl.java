@@ -3,6 +3,7 @@ package io.github.xiaoaiswitch;
 import android.content.Context;
 import android.annotation.SuppressLint;
 import android.content.Intent;
+import android.app.Activity;
 import android.app.ActivityManager;
 import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
@@ -31,6 +32,7 @@ import java.util.Map;
 import java.util.Collections;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -57,6 +59,7 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
     private StockControlEffect effect;
     private Object board;
     private View boardRoot;
+    private boolean fullScreenMoved;
     private int width;
     private int height;
 
@@ -86,6 +89,17 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
             } else {
                 Object manager = XposedHelpers.callStaticMethod(
                         XposedHelpers.findClass("com.xiaomi.voiceassistant.UiManager", loader), "getInstance", context);
+                if (Boolean.TRUE.equals(XposedHelpers.callMethod(manager, "isFullScreenInForeground"))) {
+                    Object full = XposedHelpers.callMethod(manager, "getFullScreenManager");
+                    Object tabs = XposedHelpers.callMethod(full, "getTabHostManager");
+                    Object current = XposedHelpers.callMethod(tabs, "getTabHostMainActivity");
+                    if (!(current instanceof Activity activity) || !activity.hasWindowFocus()
+                            || !activity.getClass().getName().equals("com.xiaomi.voiceassistant.TabHostMainActivity")
+                            || !activity.moveTaskToBack(true)) {
+                        throw new SecurityException("小爱全屏窗口尚未完成退场");
+                    }
+                    fullScreenMoved = true;
+                }
                 Object floatManager = XposedHelpers.callMethod(manager, "getFloatManager");
                 View root = (View) XposedHelpers.callMethod(floatManager, "getRootLayout");
                 if (root != null && root.isAttachedToWindow() && root.isShown()) {
@@ -128,7 +142,7 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
     }
 
     void prepareResult() throws Exception {
-        if (nativeAccess != null) return;
+        if (nativeAccess != null && !fullScreenMoved) return;
         ui(() -> {
             Object manager = XposedHelpers.callStaticMethod(XposedHelpers.findClass("com.xiaomi.voiceassistant.UiManager", loader), "getInstance", context);
             XposedHelpers.callMethod(manager, "startIdleState", "xiaoai_switch_control");
@@ -326,7 +340,13 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
         if (Looper.myLooper() == Looper.getMainLooper()) return action.call();
         FutureTask<T> task = new FutureTask<>(action);
         main.post(task);
-        return task.get(5, TimeUnit.SECONDS);
+        try {
+            return task.get(5, TimeUnit.SECONDS);
+        } catch (ExecutionException error) {
+            if (error.getCause() instanceof Exception cause) throw cause;
+            if (error.getCause() instanceof Error cause) throw cause;
+            throw error;
+        }
     }
 
     @Override public void close() {

@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--expected-text")
     parser.add_argument("--cancel", action="store_true")
     parser.add_argument("--gesture", action="store_true")
+    parser.add_argument("--full-screen", action="store_true", help="Start the original full-screen XiaoAi before the control fixture request.")
     parser.add_argument("--microphone", action="store_true")
     parser.add_argument("--manual-microphone", action="store_true")
     parser.add_argument("--steps", type=int)
@@ -33,6 +34,8 @@ def main():
     parser.add_argument("--registry", action="store_true")
     parser.add_argument("--system", action="store_true", help="Exercise the installed clock app's real launcher entry.")
     args = parser.parse_args()
+    if args.full_screen and not args.gesture:
+        parser.error("--full-screen requires --gesture")
     if args.system and (args.route != "chat" or args.delegate or args.microphone or args.default_route not in (None, "chat")):
         parser.error("--system requires a standalone chat request")
     if args.manual_microphone:
@@ -136,7 +139,18 @@ def main():
                     "input": [(field[0] + field[2]) / 2 / width, (field[1] + field[3]) / 2 / height],
                     "swipe": [(scroll[0] + scroll[2]) / 2 / width, (scroll[1] + (scroll[3] - scroll[1]) * .85) / height,
                               (scroll[0] + scroll[2]) / 2 / width, (scroll[1] + (scroll[3] - scroll[1]) * .25) / height]})
-        root("am start -W -n com.miui.voiceassist/com.xiaomi.voiceassistant.mainui.home.FloatActivity")
+        if args.full_screen:
+            adb("shell", "am", "start", "-W", "-n", "com.miui.voiceassist/com.xiaomi.voiceassistant.MainActivity")
+            deadline = time.monotonic() + 6
+            while time.monotonic() < deadline:
+                displays = adb("shell", "dumpsys", "window", "displays").decode("utf-8")
+                if any("mCurrentFocus=" in line and "TabHostMainActivity" in line for line in displays.splitlines()):
+                    break
+                time.sleep(.15)
+            else:
+                raise AssertionError("The original XiaoAi full-screen activity did not receive focus")
+        else:
+            root("am start -W -n com.miui.voiceassist/com.xiaomi.voiceassistant.mainui.home.FloatActivity")
         if args.microphone:
             root("am startservice -n com.miui.voiceassist/com.xiaomi.voiceassistant.VoiceService "
                  "-a com.miui.voiceassist.ACTION_VOICE_START_VOICEASSIST --es voice_assist_start_from_key xiaoai_switch_fixture --ez isCloseMic false")

@@ -1,5 +1,6 @@
 package io.github.xiaoaiswitch.core;
 
+import java.util.List;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
@@ -8,6 +9,30 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class AivsProtocolTest {
+    @Test public void streamingUsesNativeLifecycleAndOnlySendsEachDeltaOnce() {
+        JSONArray start = AivsProtocol.streamStart("DIALOG");
+        JSONArray first = AivsProtocol.streamDelta("DIALOG", "第一段");
+        JSONArray second = AivsProtocol.streamDelta("DIALOG", "第二段");
+        JSONArray finish = AivsProtocol.streamEnd("DIALOG", "问题", List.of());
+        assertEquals("StartStream", start.getJSONObject(0).getJSONObject("header").getString("name"));
+        assertEquals("EventACK", start.getJSONObject(1).getJSONObject("header").getString("name"));
+        assertEquals("ToastStream", first.getJSONObject(0).getJSONObject("header").getString("name"));
+        assertEquals("第一段", first.getJSONObject(0).getJSONObject("payload").getString("markdown_text"));
+        assertEquals("第二段", second.getJSONObject(0).getJSONObject("payload").getString("markdown_text"));
+        assertFalse(first.getJSONObject(0).getJSONObject("header").getString("id")
+                .equals(second.getJSONObject(0).getJSONObject("header").getString("id")));
+        assertEquals("FinishStream", finish.getJSONObject(0).getJSONObject("header").getString("name"));
+        assertEquals("Dialog", finish.getJSONObject(1).getJSONObject("header").getString("namespace"));
+        for (JSONArray batch : List.of(start, first, second, finish)) {
+            for (int i = 0; i < batch.length(); i++) {
+                assertEquals("DIALOG", batch.getJSONObject(i).getJSONObject("header").getString("dialog_id"));
+            }
+        }
+        assertFalse(AivsProtocol.streamDelta("DIALOG", "<FINAL>").getJSONObject(0).getJSONObject("payload")
+                .getString("markdown_text").equals("<FINAL>"));
+        assertEquals("ImageContentGallery", AivsProtocol.streamEnd("DIALOG", "问题", List.of("https://HOST/image.png"))
+                .getJSONObject(1).getJSONObject("header").getString("name"));
+    }
     @Test public void responsePreservesDialogAndNativeLifecycle() {
         JSONArray response = AivsProtocol.textResponse("DIALOG", "问题", "回答");
         assertEquals(5, response.length());

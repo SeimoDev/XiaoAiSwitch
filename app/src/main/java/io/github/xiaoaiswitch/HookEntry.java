@@ -5,6 +5,7 @@ import android.app.Dialog;
 import android.content.Context;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -27,6 +28,7 @@ import io.github.xiaoaiswitch.core.ControlLoop;
 import io.github.xiaoaiswitch.core.DialogueProtocol;
 import io.github.xiaoaiswitch.core.DialogueLoop;
 import io.github.xiaoaiswitch.core.DuplexTurns;
+import io.github.xiaoaiswitch.core.MemoryCommand;
 import io.github.xiaoaiswitch.core.CodexClient;
 import io.github.xiaoaiswitch.core.CodexOAuth;
 import io.github.xiaoaiswitch.core.ModeProfiles;
@@ -40,6 +42,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CancellationException;
+import java.util.function.Consumer;
 import java.lang.reflect.Proxy;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -130,6 +133,10 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 @Override protected void afterHookedMethod(MethodHookParam param) {
                     Object value = param.getObjectExtra("voice");
                     if (!(value instanceof VoiceRequest voice)) return;
+                    if (useNativeMemory(voice.config()) && MemoryCommand.query(voice.text()) != null) {
+                        forwardMemorySpeech(param.thisObject, voice);
+                        return;
+                    }
                     start(param.thisObject, voice.config(), voice.profile(), voice.route(), voice.dialog(), voice.text(), voice.input(), true);
                 }
             });
@@ -259,8 +266,8 @@ public final class HookEntry implements IXposedHookLoadPackage {
             boolean duplexStart = name.equals("SpeechRecognizer.DuplexRecognizeStarted") && adapter.duplexState() != null;
             boolean voiceStart = duplexStart || name.equals("SpeechRecognizer.Recognize");
             boolean nativeVision = name.equals("MultiModal.ImageUnderstand");
-            if (!name.equals("Nlp.Request") && !name.equals("Nlp.RequestLargeLanguageModelContent")
-                    && !voiceStart && !name.equals("MultiModal.ImageGeneration") && !nativeVision) return;
+            boolean nlp = name.equals("Nlp.Request") || name.equals("Nlp.RequestLargeLanguageModelContent");
+            if (!nlp && !voiceStart && !name.equals("MultiModal.ImageGeneration") && !nativeVision) return;
             if (nativeVision && !images.isAttachmentQuery(event)) return;
             JSONObject config = config();
             if (!config.optBoolean("enabled", false)) {
@@ -272,6 +279,11 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 return;
             }
             String dialog = (String) XposedHelpers.callMethod(event, "getId");
+            if (nlp && adapter.nativeQuery() != null && isNativeMemoryCapture(event)) {
+                // Preserve the original screen-collect session and its follow-up instructions.
+                keepNative(dialog, "截图收藏请求已交给原厂小爱");
+                return;
+            }
             ImageBridge.Input input = images.inspect(event);
             boolean visionEnabled = profile(config, "vision").enabled();
             if (nativeVision && !visionEnabled) {
@@ -308,6 +320,14 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 return;
             }
             String text = images.query(event);
+            if (!nativeVision && !nativeDrawing && input.ids().isEmpty() && useNativeMemory(config) && text != null) {
+                String memoryQuery = MemoryCommand.query(text);
+                if (memoryQuery != null) {
+                    if (!memoryQuery.equals(text)) XposedHelpers.callMethod(XposedHelpers.callMethod(event, "getPayload"), "setQuery", memoryQuery);
+                    keepNative(dialog, "全局记忆请求已交给原厂小爱");
+                    return;
+                }
+            }
             if (nativeVision && (text == null || text.trim().isEmpty())) text = "请描述这张图片。";
             QueryRouter.Selection selection = QueryRouter.select(text == null ? "" : text,
                     config.optString("defaultRoute", "chat"), nativeDrawing, useVision);
@@ -413,6 +433,57 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     ? XposedHelpers.callMethod(optional, "get") : null;
         }
 
+        private boolean useNativeMemory(JSONObject config) {
+            return adapter.nativeQuery() != null && config.optBoolean("nativeMemory", true);
+        }
+
+        private boolean isNativeMemoryCapture(Object event) {
+            Object contexts = XposedHelpers.callMethod(event, "getContexts");
+            if (!(contexts instanceof List<?> list)) return false;
+            for (Object item : list) {
+                if ("General.RequestState".equals(XposedHelpers.callMethod(item, "getFullName"))) {
+                    Object state = XposedHelpers.callMethod(item, "getPayload");
+                    String origin = (String) optionalValue(XposedHelpers.callMethod(state, "getOrigin"));
+                    if (MemoryCommand.isNativeCaptureOrigin(origin)) return true;
+                }
+            }
+            return false;
+        }
+
+        private void keepNative(String dialog, String status) {
+            duplexVoice = null;
+            owned.remove(dialog);
+            generation.incrementAndGet();
+            cancelPending();
+            report(context, status);
+        }
+
+        private void forwardMemorySpeech(Object engine, VoiceRequest voice) {
+            long request = generation.incrementAndGet();
+            cancelPending();
+            new Handler(Looper.getMainLooper()).post(() -> {
+                if (!current(request, voice.config().optLong("revision"))) return;
+                try {
+                    // End this ASR-only conversation through the original UI lifecycle before re-submitting as native NLP.
+                    duplexVoice = null;
+                    owned.remove(voice.dialog());
+                    XposedHelpers.callStaticMethod(XposedHelpers.findClass(adapter.duplexState(), loader),
+                            "exitContinuousDialogAndFinishStreamIfNeed");
+                    Class<?> replay = XposedHelpers.findClass(adapter.nativeQuery(), loader);
+                    Object builder = XposedHelpers.newInstance(XposedHelpers.findClass(adapter.nativeQuery() + "$e", loader));
+                    String origin = (String) XposedHelpers.callStaticMethod(
+                            XposedHelpers.findClass("com.xiaomi.voiceassistant.utils.p6", loader), "getLastQueryOrigin");
+                    XposedHelpers.callMethod(builder, "setQuery", voice.text());
+                    XposedHelpers.callMethod(builder, "setQueryOrigin", origin);
+                    XposedHelpers.callStaticMethod(replay, "startQuery", XposedHelpers.callMethod(builder, "build"));
+                } catch (Throwable error) {
+                    deliver(engine, request, AivsProtocol.textResponse(voice.dialog(), voice.text(), "原厂全局记忆入口未就绪。"),
+                            false, "");
+                    report(context, "全局记忆启动失败：" + error.getClass().getSimpleName());
+                }
+            });
+        }
+
         private record VoiceRequest(JSONObject config, Profile profile, String route, String dialog, String text, ImageBridge.Input input) {}
         private record PendingVoice(ImageBridge.Input input, boolean thinking, String route) {}
         private record DuplexVoice(Object engine, DuplexTurns turns, PendingVoice profile) {}
@@ -443,6 +514,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
             JSONArray prior = history;
             report(context, "自定义请求中：" + route + " / " + profile.model());
             network.execute(() -> {
+                ReplyStream stream = new ReplyStream(engine, request, dialog, text, cancellation);
                 try {
                     requireCurrent(request, config);
                     if (route.equals("control")) {
@@ -491,11 +563,13 @@ public final class HookEntry implements IXposedHookLoadPackage {
                         }
                         List<String> output = generate(config, imageProfile, task.text(), originals, request, cancellation);
                         return new DialogueLoop.Result("已生成图片", output);
-                    }, () -> current(request, config.optLong("revision")), cancellation, this::chat);
+                    }, () -> current(request, config.optLong("revision")), cancellation, (selected, bodyPart, cancel) -> {
+                        stream.beginPart();
+                        return chat(selected, bodyPart, cancel, stream::delta);
+                    });
                     requireCurrent(request, config);
                     synchronized (histories) { histories.put(route, ChatProtocol.history(body, result.text())); }
-                    deliver(engine, request, result.images().isEmpty() ? AivsProtocol.textResponse(dialog, text, result.text())
-                            : AivsProtocol.richResponse(dialog, text, result.text(), result.images()), speak, result.text());
+                    stream.finish(result.text(), result.images(), speak);
                     report(context, "自定义请求成功：" + route + " / " + profile.model());
                 } catch (Exception error) {
                     if (!current(request, config.optLong("revision"))) return;
@@ -503,14 +577,56 @@ public final class HookEntry implements IXposedHookLoadPackage {
                             || error instanceof CodexClient.LoginRequired || error instanceof SecurityException ? error.getMessage()
                             : "模型请求失败（" + error.getClass().getSimpleName() + "），请检查配置和服务状态。";
                     if (route.equals("vision") && error instanceof ModelClient.HttpError) message += "。请确认所选模型支持图片输入。";
-                    deliver(engine, request, AivsProtocol.textResponse(dialog, text,
-                            message), false, "");
+                    stream.beginPart();
+                    stream.finish(message, List.of(), false);
                     report(context, error instanceof SecurityException ? "操作已停止：" + error.getMessage()
                             : "自定义请求失败：" + error.getClass().getSimpleName());
                 } finally {
                     runningHttp.compareAndSet(cancellation, null);
                 }
             });
+        }
+
+        private final class ReplyStream {
+            private final Object engine;
+            private final long request;
+            private final String dialog;
+            private final String query;
+            private final ModelClient.Cancellation cancellation;
+            private boolean started;
+            private boolean partHasText;
+
+            ReplyStream(Object engine, long request, String dialog, String query, ModelClient.Cancellation cancellation) {
+                this.engine = engine;
+                this.request = request;
+                this.dialog = dialog;
+                this.query = query;
+                this.cancellation = cancellation;
+            }
+
+            void beginPart() { partHasText = false; }
+
+            void delta(String text) {
+                if (text.isEmpty() || generation.get() != request || cancellation.isCancelled()) return;
+                if (!started) {
+                    started = true;
+                    deliver(engine, request, AivsProtocol.streamStart(dialog), false, "");
+                } else if (!partHasText) {
+                    deliver(engine, request, AivsProtocol.streamDelta(dialog, "\n\n"), false, "");
+                }
+                partHasText = true;
+                deliver(engine, request, AivsProtocol.streamDelta(dialog, text), false, "");
+            }
+
+            void finish(String text, List<String> images, boolean speak) {
+                if (!started) {
+                    deliver(engine, request, images.isEmpty() ? AivsProtocol.textResponse(dialog, query, text)
+                            : AivsProtocol.richResponse(dialog, query, text, images), speak, text);
+                    return;
+                }
+                if (!partHasText) delta(text);
+                deliver(engine, request, AivsProtocol.streamEnd(dialog, query, images), speak, text);
+            }
         }
 
         private List<String> generate(JSONObject config, Profile profile, String text, List<ModelClient.Image> input,
@@ -562,13 +678,19 @@ public final class HookEntry implements IXposedHookLoadPackage {
         }
 
         private JSONObject chat(Profile profile, JSONObject request, ModelClient.Cancellation cancellation) throws Exception {
-            if (!profile.provider().equals("codex_subscription")) return ModelClient.chat(profile, request, cancellation);
+            return chat(profile, request, cancellation, null);
+        }
+
+        private JSONObject chat(Profile profile, JSONObject request, ModelClient.Cancellation cancellation, Consumer<String> delta) throws Exception {
+            if (!profile.provider().equals("codex_subscription")) {
+                return delta == null ? ModelClient.chat(profile, request, cancellation) : ModelClient.chat(profile, request, cancellation, delta);
+            }
             CodexOAuth.Tokens tokens = credentials(false, null);
             try {
-                return CodexClient.chat(profile, request, tokens, cancellation);
+                return CodexClient.chat(profile, request, tokens, cancellation, delta);
             } catch (ModelClient.HttpError error) {
                 if (error.status() != 401) throw error;
-                return CodexClient.chat(profile, request, credentials(true, tokens.accessToken()), cancellation);
+                return CodexClient.chat(profile, request, credentials(true, tokens.accessToken()), cancellation, delta);
             }
         }
 

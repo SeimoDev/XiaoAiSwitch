@@ -9,16 +9,24 @@ import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.util.List;
 import java.util.concurrent.CancellationException;
+import java.util.function.Consumer;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 public final class CodexClient {
     private CodexClient() {}
+    private static final Consumer<String> IGNORE_TEXT = text -> {};
     public static final class LoginRequired extends IOException {
         public LoginRequired() { super("请在模块设置中登录或重新登录 Codex 订阅"); }
     }
 
     public static JSONObject chat(Profile profile, JSONObject chat, CodexOAuth.Tokens tokens, ModelClient.Cancellation cancellation) throws IOException {
+        return chat(profile, chat, tokens, cancellation, IGNORE_TEXT);
+    }
+
+    /** Emits only wire text deltas. Tool-only callers can omit the observer. */
+    public static JSONObject chat(Profile profile, JSONObject chat, CodexOAuth.Tokens tokens, ModelClient.Cancellation cancellation,
+                                   Consumer<String> onDelta) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(profile.endpoint() + "/responses").openConnection();
         cancellation.attach(connection);
         connection.setRequestMethod("POST");
@@ -38,8 +46,11 @@ public final class CodexClient {
             int status = connection.getResponseCode();
             if (status < 200 || status >= 300) throw new ModelClient.HttpError(status);
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
-                return readEvents(reader, cancellation);
+                return readEvents(reader, cancellation, onDelta == null ? IGNORE_TEXT : onDelta);
             }
+        } catch (IOException error) {
+            if (cancellation.isCancelled()) throw new CancellationException();
+            throw error;
         } finally {
             cancellation.detach(connection);
             connection.disconnect();
@@ -93,26 +104,32 @@ public final class CodexClient {
     }
 
     public static JSONObject readEvents(BufferedReader reader, ModelClient.Cancellation cancellation) throws IOException {
+        return readEvents(reader, cancellation, IGNORE_TEXT);
+    }
+
+    public static JSONObject readEvents(BufferedReader reader, ModelClient.Cancellation cancellation, Consumer<String> onDelta) throws IOException {
         JSONArray done = new JSONArray();
-        String line;
-        int size = 0;
-        while ((line = reader.readLine()) != null) {
-            if (cancellation.isCancelled()) throw new CancellationException();
-            size += line.length();
-            if (size > 16 * 1024 * 1024) throw new IOException("Codex 响应超过 16 MiB");
-            if (!line.startsWith("data:")) continue;
-            String data = line.substring(5).trim();
-            if (data.isEmpty() || data.equals("[DONE]")) continue;
+        ServerSentEvents events = new ServerSentEvents(reader, cancellation);
+        String data;
+        while ((data = events.next()) != null) {
+            if (data.trim().isEmpty() || data.trim().equals("[DONE]")) continue;
             JSONObject event = new JSONObject(data);
             String type = event.optString("type");
+            if (type.equals("response.output_text.delta")) {
+                String delta = event.optString("delta", "");
+                if (!delta.isEmpty()) {
+                    onDelta.accept(delta);
+                }
+            }
             if (type.equals("response.output_item.done")) done.put(event.getJSONObject("item"));
             if (type.equals("response.completed")) {
                 JSONObject response = event.getJSONObject("response");
                 JSONArray output = response.optJSONArray("output");
                 if ((output == null || output.length() == 0) && done.length() > 0) response.put("output", done);
+                if (cancellation.isCancelled()) throw new CancellationException();
                 return CodexProtocol.completion(response);
             }
-            if (type.equals("response.failed") || type.equals("error")) throw new IOException("Codex 返回失败事件");
+            if (type.equals("response.failed") || type.equals("response.incomplete") || type.equals("error")) throw new IOException("Codex 返回失败事件");
         }
         throw new IOException("Codex 响应未完成");
     }
