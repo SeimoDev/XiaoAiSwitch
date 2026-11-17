@@ -16,6 +16,7 @@ import android.view.InputEvent;
 import android.view.MotionEvent;
 import de.robv.android.xposed.XposedHelpers;
 import io.github.xiaoaiswitch.core.ControlLoop;
+import io.github.xiaoaiswitch.core.ControlViewport;
 import java.lang.reflect.Proxy;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -25,13 +26,14 @@ import java.util.function.Consumer;
 final class NativePhoneAccess {
     private static final String INJECT_EVENTS = "android.permission.INJECT_EVENTS";
     private static final int DISPLAY = Display.DEFAULT_DISPLAY;
-    private record Target(String pkg, int uid, int task, int rotation, int width, int height) {}
+    private record Target(String pkg, int uid, int task, int rotation, int width, int height, ControlViewport viewport) {}
 
     private final Context context;
     private final ClassLoader loader;
     private final AssistantVersion.ControlBackend mapping;
     private final Runnable check;
     private final Consumer<String> report;
+    private final ControlDisplayViewport displayViewport;
     private Target snapshot;
     private String launched;
 
@@ -42,6 +44,7 @@ final class NativePhoneAccess {
         this.mapping = mapping;
         this.check = check;
         this.report = report;
+        displayViewport = new ControlDisplayViewport(context);
     }
 
     static boolean available(Context context, ClassLoader loader, AssistantVersion.ControlBackend mapping) {
@@ -83,9 +86,9 @@ final class NativePhoneAccess {
         if (launched != null) {
             if (!next.pkg().equals(launched)) throw new ControlLoop.TransientRead("已请求打开目标应用，但它还没有进入前台");
         } else if (snapshot != null && !snapshot.equals(next)) {
-            throw new SecurityException("授权的前台窗口或显示尺寸已变化");
+            throw new SecurityException("授权的前台窗口或操作区域已变化");
         }
-        if (!permitted(next)) {
+        if (next.viewport() == null) {
             if (snapshot == null) {
                 launched = null;
                 return null;
@@ -96,16 +99,19 @@ final class NativePhoneAccess {
         Bitmap bitmap = (Bitmap) XposedHelpers.callMethod(singleton(mapping.capture()), "takeScreenshotAndExcludeSelf",
                 next.width(), next.height(), display(), true, false);
         if (bitmap == null) throw new ControlLoop.TransientRead("原厂暂未返回屏幕内容");
+        Bitmap cropped = null;
         try {
             if (bitmap.getWidth() != next.width() || bitmap.getHeight() != next.height() || !next.equals(foreground())) {
                 throw new SecurityException("屏幕和授权窗口不一致");
             }
+            ControlViewport viewport = next.viewport();
+            // The OEM excludes bar layers, but leaves their pixels in the full-display coordinate space.
+            cropped = ControlDisplayViewport.crop(bitmap, viewport);
             snapshot = next;
             launched = null;
-            return bitmap;
-        } catch (RuntimeException error) {
-            bitmap.recycle();
-            throw error;
+            return cropped;
+        } finally {
+            if (cropped != bitmap) bitmap.recycle();
         }
     }
 
@@ -122,6 +128,11 @@ final class NativePhoneAccess {
     void opened(String pkg) {
         snapshot = null;
         launched = pkg;
+    }
+
+    ControlViewport.Point point(double x, double y) {
+        if (snapshot == null) throw new SecurityException("尚未取得授权的操作截图");
+        return snapshot.viewport().project(x, y);
     }
 
     void inject(InputEvent event) {
@@ -157,16 +168,16 @@ final class NativePhoneAccess {
             Display display = display();
             DisplayMetrics metrics = new DisplayMetrics();
             display.getRealMetrics(metrics);
-            return new Target(pkg, uid, info.taskId, display.getRotation(),
-                    metrics.widthPixels, metrics.heightPixels);
+            ControlViewport viewport = permitted(pkg, uid) ? displayViewport.read(display, metrics.widthPixels, metrics.heightPixels) : null;
+            return new Target(pkg, uid, info.taskId, display.getRotation(), metrics.widthPixels, metrics.heightPixels, viewport);
         } catch (PackageManager.NameNotFoundException | XposedHelpers.InvocationTargetError | XposedHelpers.ClassNotFoundError | LinkageError error) {
             throw new SecurityException("系统未返回默认屏幕前台", error);
         }
     }
 
-    private boolean permitted(Target target) {
-        return target.uid() >= android.os.Process.FIRST_APPLICATION_UID && !target.pkg().equals(context.getPackageName())
-                && !target.pkg().equals("com.miui.securitycenter") && !target.pkg().equals("com.android.systemui");
+    private boolean permitted(String pkg, int uid) {
+        return uid >= android.os.Process.FIRST_APPLICATION_UID && !pkg.equals(context.getPackageName())
+                && !pkg.equals("com.miui.securitycenter") && !pkg.equals("com.android.systemui");
     }
 
     private Display display() {

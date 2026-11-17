@@ -132,3 +132,27 @@ python -m unittest test_assistant_version
 重置，等待期间也能立即停止。系统授权拒绝和已提交或结果不明的触摸不会自动重放。
 真机使用持续返回 HTTP 503 的本机测试源，观察到 1 次首试、3 次重试，
 间隔约 5.20、5.23、5.22 秒；最后报告错误，测试页未收到点击。
+
+### 0.10.10：截图范围与触点坐标统一
+
+- 日历案例：`05:35:14.154` 的 InputDispatcher 日志确认，预期目标是日历 UID 10300，
+  命中的是 `StatusBar`（UID 1000）；`05:35:14.176` 模块报告此次操作停止。
+  此日志未保存具体触点；同设备另一次输入窗口采样记录状态栏触摸范围为 `[0,0][1440,144]`。
+- 重新核对同一提取 APK（SHA-256 见文件顶部）：`uiagent.e.takeScreenShot` 按 `ba`
+  的默认屏尺寸调用 `r21.t.takeScreenshotAndExcludeSelf`。该方法的 source crop 仍是
+  `(0,0,width,height)`；`setExcludeOrIncludeLayerNames` 仅排除 `StatusBar`、
+  `NavigationBar` 等截图图层，未移除相应像素的坐标。此前模块对完整图归一化，
+  所以看起来是应用内容的位置仍可能是系统的触摸区域。
+- 新版先读默认屏的稳定边距、刘海和系统必要手势区域，裁掉对应像素后再给模型。
+  点击/滑动以同一张裁剪截图归一化，并将裁剪原点加回默认屏坐标。
+  裁剪范围纳入已有目标快照；显示尺寸、旋转或边距不匹配时，旧图不再用于操作。
+  保留原厂屏幕授权、目标 UID 的同步派发和遮挡拒绝。仍可能存在独立的瞬时覆盖窗口，
+  系统拒绝时不把触点挪到另一个位置。
+- Android 30+ 使用窗口上下文的 [WindowMetrics](https://developer.android.com/reference/android/view/WindowMetrics#getWindowInsets())
+  和 [稳定系统栏边距](https://developer.android.com/reference/android/view/WindowInsets#getInsetsIgnoringVisibility(int))；
+  Android 29 保留 [AOSP 稳定边距查询](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-10.0.0_r1/core/java/android/view/IWindowManager.aidl)
+  与刘海边距合并的路径，未读取到几何时不回退到全屏点按。
+- 离线验证：核心测试覆盖原故障设备样本尺寸、边界、缩放和横屏偏移；
+  `scripts/emulator_viewport_test.py` 在本地 Android 37 模拟器验证同一生产裁剪函数，
+  竖屏 `1280×2856` 时首行 `y=192`、横屏 `2856×1280` 时首行 `y=156`，
+  两种方向的首行触点都被测试应用收到。未连接手机或重跑手机上的日历；模拟器不运行小爱私有截图服务。

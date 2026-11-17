@@ -144,13 +144,24 @@ def main():
             elif args.control_launch:
                 args.query = "CONTROL_LAUNCH_FIXTURE"
             elif not args.cancel:
+                version = adb("shell", "dumpsys", "package", "com.miui.voiceassist").decode("utf-8")
+                version_code = re.search(r"\bversionCode=(\d+)", version)
+                left, top, right, bottom = 0, 0, width, height
+                if version_code and version_code[1] == "508002070":
+                    assert "controlViewport" in fixture, "The actual control viewport is required on XiaoAi 8.2"
+                    left, top, right, bottom = map(int, fixture["controlViewport"].split(","))
+
+                def point(x, y):
+                    assert left <= x <= right - 1 and top <= y <= bottom - 1, "Fixture coordinates must lie inside the control viewport"
+                    return [(x - left) / (right - left - 1), (y - top) / (bottom - top - 1)]
+
                 tap = bounds("increment")
                 field = bounds("input")
                 scroll = bounds("scrollArea")
-                args.query = "CONTROL_GESTURE " + json.dumps({"tap": [(tap[0] + tap[2]) / 2 / width, (tap[1] + tap[3]) / 2 / height],
-                    "input": [(field[0] + field[2]) / 2 / width, (field[1] + field[3]) / 2 / height],
-                    "swipe": [(scroll[0] + scroll[2]) / 2 / width, (scroll[1] + (scroll[3] - scroll[1]) * .85) / height,
-                              (scroll[0] + scroll[2]) / 2 / width, (scroll[1] + (scroll[3] - scroll[1]) * .25) / height],
+                args.query = "CONTROL_GESTURE " + json.dumps({"tap": point((tap[0] + tap[2]) / 2, (tap[1] + tap[3]) / 2),
+                    "input": point((field[0] + field[2]) / 2, (field[1] + field[3]) / 2),
+                    "swipe": point((scroll[0] + scroll[2]) / 2, scroll[1] + (scroll[3] - scroll[1]) * .85)
+                        + point((scroll[0] + scroll[2]) / 2, scroll[1] + (scroll[3] - scroll[1]) * .25),
                     "reopen_board": args.reopen_board})
         if args.full_screen:
             adb("shell", "am", "start", "-W", "-n", "com.miui.voiceassist/com.xiaomi.voiceassistant.MainActivity")

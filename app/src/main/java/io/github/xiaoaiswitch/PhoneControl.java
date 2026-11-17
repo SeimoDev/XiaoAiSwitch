@@ -25,6 +25,7 @@ import android.widget.Button;
 import de.robv.android.xposed.XposedHelpers;
 import io.github.xiaoaiswitch.core.ControlLoop;
 import io.github.xiaoaiswitch.core.ControlProtocol;
+import io.github.xiaoaiswitch.core.ControlViewport;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.List;
@@ -306,8 +307,10 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
         pointer.id = 0;
         pointer.toolType = MotionEvent.TOOL_TYPE_FINGER;
         MotionEvent.PointerCoords coords = new MotionEvent.PointerCoords();
-        coords.x = (float) (x * (width - 1));
-        coords.y = (float) (y * (height - 1));
+        ControlViewport.Point point = nativeAccess == null ? new ControlViewport.Point((float) (x * (width - 1)), (float) (y * (height - 1)))
+                : nativeAccess.point(x, y);
+        coords.x = point.x();
+        coords.y = point.y();
         coords.pressure = 1;
         coords.size = 1;
         inject(MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1, new MotionEvent.PointerProperties[]{pointer},

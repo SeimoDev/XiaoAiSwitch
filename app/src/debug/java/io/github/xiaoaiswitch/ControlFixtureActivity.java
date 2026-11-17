@@ -1,6 +1,10 @@
 package io.github.xiaoaiswitch;
 
 import android.app.Activity;
+import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -12,11 +16,13 @@ import android.util.DisplayMetrics;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.Display;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import io.github.xiaoaiswitch.core.ControlViewport;
 
 /** Local interaction fixture, excluded from release builds. */
 public final class ControlFixtureActivity extends Activity {
@@ -76,12 +82,23 @@ public final class ControlFixtureActivity extends Activity {
         scroll.setOnScrollChangeListener((view, x, y, oldX, oldY) ->
                 getSharedPreferences("control_fixture", 0).edit().putInt("scroll", y).apply());
         layout.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        ControlDisplayViewport displayViewport = new ControlDisplayViewport(getApplicationContext());
         layout.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            Display current = getWindowManager().getDefaultDisplay();
             DisplayMetrics display = new DisplayMetrics();
-            getWindowManager().getDefaultDisplay().getRealMetrics(display);
-            getSharedPreferences("control_fixture", 0).edit()
+            current.getRealMetrics(display);
+            SharedPreferences.Editor stateEditor = getSharedPreferences("control_fixture", 0).edit()
                     .putString("increment", bounds(increment)).putString("input", bounds(input)).putString("scrollArea", bounds(scroll))
-                    .putInt("displayWidth", display.widthPixels).putInt("displayHeight", display.heightPixels).apply();
+                    .putInt("displayWidth", display.widthPixels).putInt("displayHeight", display.heightPixels);
+            try {
+                ControlViewport viewport = displayViewport.read(current, display.widthPixels, display.heightPixels);
+                stateEditor.remove("viewportError").putString("controlViewport",
+                        viewport.left() + "," + viewport.top() + "," + viewport.right() + "," + viewport.bottom());
+                if (getIntent().getBooleanExtra("viewport_test", false)) verifyViewport(stateEditor, display, viewport);
+            } catch (SecurityException error) {
+                stateEditor.remove("controlViewport").putString("viewportError", error.getMessage());
+            }
+            stateEditor.apply();
         });
         setContentView(layout);
         if (getIntent().getBooleanExtra("play_audio", false)) {
@@ -89,6 +106,22 @@ public final class ControlFixtureActivity extends Activity {
             audioWait = System.currentTimeMillis();
             timer.postDelayed(this::awaitAsr, 100);
         }
+    }
+
+    private static void verifyViewport(SharedPreferences.Editor editor, DisplayMetrics display, ControlViewport viewport) {
+        Bitmap source = Bitmap.createBitmap(display.widthPixels, display.heightPixels, Bitmap.Config.ARGB_8888);
+        source.eraseColor(Color.RED);
+        Canvas canvas = new Canvas(source);
+        canvas.clipRect(viewport.left(), viewport.top(), viewport.right(), viewport.bottom());
+        canvas.drawColor(Color.GREEN);
+        Bitmap crop = ControlDisplayViewport.crop(source, viewport);
+        editor.putInt("cropWidth", crop.getWidth()).putInt("cropHeight", crop.getHeight())
+                .putBoolean("cropContainsOnlyContent", crop.getPixel(0, 0) == Color.GREEN
+                        && crop.getPixel(crop.getWidth() - 1, crop.getHeight() - 1) == Color.GREEN);
+        ControlViewport.Point top = viewport.project(0.5, 0);
+        editor.putInt("projectedX", Math.round(top.x())).putInt("projectedY", Math.round(top.y()));
+        if (crop != source) crop.recycle();
+        source.recycle();
     }
 
     private String bounds(View view) {

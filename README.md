@@ -4,7 +4,7 @@
 
 [![开源协议：GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?logo=gnu)](LICENSE)
 [![Android 构建状态](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml/badge.svg?branch=dev)](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml)
-[![源码版本：0.10.9](https://img.shields.io/badge/version-0.10.9-blue)](app/build.gradle)
+[![源码版本：0.10.10](https://img.shields.io/badge/version-0.10.10-blue)](app/build.gradle)
 [![Android API 27+](https://img.shields.io/badge/Android-API%2027%2B-3DDC84?logo=android&logoColor=white)](#兼容性)
 [![LSPosed 模块](https://img.shields.io/badge/LSPosed-Xposed%20API%2082-orange)](#兼容性)
 [![GitHub Stars](https://img.shields.io/github/stars/SeimoDev/XiaoAiSwitch?logo=github)](https://github.com/SeimoDev/XiaoAiSwitch/stargazers)
@@ -56,7 +56,7 @@
 | 默认通道 / 自动分流 | 在通用设置配置。自动分流没有固定调用上限；模型给出最终答复或任务取消时结束。也可用 `/chat 文本`、`/voice 文本`、`/draw 描述`、`/control 任务` 显式切换。 |
 | 系统工具 | 在「通用设置」单独开启。启用时自动在你的 System Prompt 后加入工具说明；时钟动作的实际状态以系统时钟为准。 |
 | 原厂全局记忆 | 在「通用设置」查看开关和原厂记忆设置。可用 `/memory 请求` 明确指定原厂处理；模块不把原厂记忆条目交给自选 Provider。 |
-| 手机控制 | 模型需支持图像和工具调用；手机需解锁，并通过原厂屏幕授权。打开应用后等待目标进入前台，再以新画面操作。暂时异常隔 5 秒重试，最多额外重试 3 次。可在通用设置填写步骤上限（默认 12 步），也可手动停止。 |
+| 手机控制 | 模型需支持图像和工具调用；手机需解锁，并通过原厂屏幕授权。8.2 的点击和滑动以最近一张截图的可操作范围为准，不包含状态栏等系统边缘。打开应用后等待目标进入前台，再以新画面操作。暂时异常隔 5 秒重试，最多额外重试 3 次。可在通用设置填写步骤上限（默认 12 步），也可手动停止。 |
 
 ## 从源码构建
 

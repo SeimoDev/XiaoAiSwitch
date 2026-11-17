@@ -35,9 +35,9 @@ public final class ControlProtocol {
                 "打开用户指定的应用。启动后使用下一轮的新截图，再决定点击或输入。", new JSONObject()
                         .put("package", new JSONObject().put("type", "string")), "package"));
         if (hasScreen) tools
-                .put(function("tap", "点击当前屏幕坐标；x、y 为从左上角起的 0 到 1 比例。duration_ms 可用于长按。", new JSONObject()
+                .put(function("tap", "点击最近一张截图中的位置；x、y 为从图像左上角起的 0 到 1 比例，不是整块屏幕的坐标。duration_ms 可用于长按。", new JSONObject()
                         .put("x", point).put("y", point).put("duration_ms", duration), "x", "y"))
-                .put(function("swipe", "在当前屏幕滑动，起点终点均为 0 到 1 比例坐标。", new JSONObject()
+                .put(function("swipe", "在最近一张截图范围内滑动，起点和终点均为相对该截图的 0 到 1 比例坐标。", new JSONObject()
                         .put("x", point).put("y", point).put("x2", point).put("y2", point).put("duration_ms", duration), "x", "y", "x2", "y2"))
                 .put(function("type_text", "向已获得焦点的输入框输入文本。", new JSONObject()
                         .put("text", new JSONObject().put("type", "string")), "text"))
