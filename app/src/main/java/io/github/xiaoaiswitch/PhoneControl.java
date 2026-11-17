@@ -177,6 +177,12 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
         main.post(() -> { if (!closed.get() && button != null) button.setText("停止控制 · " + step); });
     }
 
+    void retrying(int attempt) {
+        main.post(() -> {
+            if (!closed.get() && button != null) button.setText("停止 · 等待重试 " + attempt + "/" + ControlLoop.RETRY_LIMIT);
+        });
+    }
+
     void prepareResult() throws Exception {
         if (nativeAccess != null && !fullScreenMoved) return;
         ui(() -> {
@@ -200,7 +206,7 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
             Object capture = XposedHelpers.getStaticObjectField(XposedHelpers.findClass("c20.b", loader), "a");
             bitmap = (Bitmap) XposedHelpers.callMethod(capture, "takePlanBScreenShot");
         }
-        if (bitmap == null) throw new IllegalStateException("原厂截图接口未返回图像");
+        if (bitmap == null) throw new ControlLoop.TransientRead("原厂截图接口暂未返回图像");
         width = bitmap.getWidth();
         height = bitmap.getHeight();
         double scale = Math.min(1, 1280.0 / Math.max(width, height));

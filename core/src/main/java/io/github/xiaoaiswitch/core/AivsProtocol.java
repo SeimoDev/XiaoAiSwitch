@@ -18,6 +18,14 @@ public final class AivsProtocol {
                 .put(instruction(dialog, "Dialog", "Finish", new JSONObject()));
     }
 
+    public static JSONArray queryPrelude(String dialog, String query) {
+        return new JSONArray()
+                .put(instruction(dialog, "Nlp", "StartPreStream", new JSONObject()))
+                .put(instruction(dialog, "Nlp", "ExpectStream", new JSONObject()))
+                .put(instruction(dialog, "Template", "Query", new JSONObject().put("text", query)))
+                .put(instruction(dialog, "Nlp", "FinishPreStream", new JSONObject()));
+    }
+
     public static JSONArray streamStart(String dialog) {
         return new JSONArray()
                 .put(instruction(dialog, "Nlp", "StartStream", new JSONObject()))

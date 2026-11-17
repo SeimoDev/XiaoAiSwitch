@@ -37,6 +37,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
@@ -137,7 +138,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
                         forwardMemorySpeech(param.thisObject, voice);
                         return;
                     }
-                    start(param.thisObject, voice.config(), voice.profile(), voice.route(), voice.dialog(), voice.text(), voice.input(), true);
+                    start(param.thisObject, voice.config(), voice.profile(), voice.route(), voice.dialog(), voice.text(), voice.text(), voice.input(), true);
                 }
             });
             XposedHelpers.findAndHookMethod(engine.session(), loader, "clearSession", new XC_MethodHook() {
@@ -320,6 +321,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 return;
             }
             String text = images.query(event);
+            String question = text;
             if (!nativeVision && !nativeDrawing && input.ids().isEmpty() && useNativeMemory(config) && text != null) {
                 String memoryQuery = MemoryCommand.query(text);
                 if (memoryQuery != null) {
@@ -342,7 +344,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 report(context, "保留原厂：通道未启用自定义模型（" + selection.route() + "）");
                 return;
             }
-            start(param.thisObject, config, profile, selection.route(), dialog, selection.text(), input, selection.route().equals("voice"));
+            start(param.thisObject, config, profile, selection.route(), dialog, selection.text(), question, input, selection.route().equals("voice"));
             param.setResult(true);
         }
 
@@ -495,8 +497,19 @@ public final class HookEntry implements IXposedHookLoadPackage {
             }
         }
 
-        private void start(Object engine, JSONObject config, Profile profile, String route, String dialog, String text, ImageBridge.Input input, boolean speak) {
-            own(dialog, route);
+        private void start(Object engine, JSONObject config, Profile profile, String route, String nativeDialog, String text,
+                           String question, ImageBridge.Input input, boolean speak) {
+            boolean isDialogue = !route.equals("image") && !route.equals("control");
+            String dialog;
+            synchronized (owned) {
+                String previous = owned.get(nativeDialog);
+                // Typed requests during continuous listening can share the transport ID.
+                dialog = isDialogue && previous != null && !previous.equals("voice-pending") ? UUID.randomUUID().toString() : nativeDialog;
+                own(nativeDialog, route);
+            }
+            boolean showQuestion = isDialogue && question != null && !question.trim().isEmpty()
+                    && (adapter.queryCardPolicyOwner() == null || Boolean.TRUE.equals(XposedHelpers.callStaticMethod(
+                    XposedHelpers.findClass(adapter.queryCardPolicyOwner(), loader), "shouldAddQueryCard", nativeDialog)));
             long request = generation.incrementAndGet();
             cancelPending();
             ModelClient.Cancellation cancellation = new ModelClient.Cancellation();
@@ -514,9 +527,10 @@ public final class HookEntry implements IXposedHookLoadPackage {
             JSONArray prior = history;
             report(context, "自定义请求中：" + route + " / " + profile.model());
             network.execute(() -> {
-                ReplyStream stream = new ReplyStream(engine, request, dialog, text, cancellation);
+                ReplyStream stream = new ReplyStream(engine, request, dialog, question == null ? text : question, cancellation);
                 try {
                     requireCurrent(request, config);
+                    if (showQuestion) deliver(engine, request, AivsProtocol.queryPrelude(dialog, question), false, "");
                     if (route.equals("control")) {
                         String answer = control(config, profile, text, request, cancellation);
                         requireCurrent(request, config);
@@ -662,7 +676,11 @@ public final class HookEntry implements IXposedHookLoadPackage {
                         () -> current(request, config.optLong("revision")), cancellation, step -> {
                     phone.progress(step);
                     report(context, "手机控制模型调用：" + step + " / " + profile.model());
-                }, this::chat);
+                }, this::chat, attempt -> {
+                    phone.retrying(attempt);
+                    report(context, "手机控制暂未就绪，等待 " + ControlLoop.RETRY_DELAY_MS / 1000
+                            + " 秒后重试（" + attempt + "/" + ControlLoop.RETRY_LIMIT + "）");
+                });
             } finally {
                 try {
                     if (current(request, config.optLong("revision")) && !cancellation.isCancelled()) phone.prepareResult();

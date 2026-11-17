@@ -241,10 +241,10 @@ private fun SettingsScreen() {
                 ChoiceRow("普通输入默认通道", routeNames[SettingsConfig.ROUTES.indexOf(config.optString("defaultRoute", "chat")).coerceAtLeast(0)],
                     "default_route") { chooser = "default" }
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Field("控制调用上限", config.optString("controlSteps", "12"), "control_steps", keyboardType = KeyboardType.Number) { value ->
+                    Field("控制步骤上限", config.optString("controlSteps", "12"), "control_steps", keyboardType = KeyboardType.Number) { value ->
                         update("controlSteps", value.toIntOrNull() ?: value)
                     }
-                    Text("填写允许的模型调用次数，达到后自动停止。默认 12 次。", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                    Text("达到步数上限后自动停止（默认 12 步）；同一步的临时重试不算新步骤。", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                 }
             }
         }

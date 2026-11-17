@@ -15,6 +15,7 @@ import android.view.Display;
 import android.view.InputEvent;
 import android.view.MotionEvent;
 import de.robv.android.xposed.XposedHelpers;
+import io.github.xiaoaiswitch.core.ControlLoop;
 import java.lang.reflect.Proxy;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -80,31 +81,27 @@ final class NativePhoneAccess {
     Bitmap capture() throws Exception {
         Target next = foreground();
         if (launched != null) {
-            long until = SystemClock.uptimeMillis() + 5000;
-            while (!next.pkg().equals(launched)) {
-                if (SystemClock.uptimeMillis() >= until) {
-                    throw new SecurityException("已请求打开目标应用，但它没有在 5 秒内进入前台");
-                }
-                Thread.sleep(100);
-                next = foreground();
-            }
-            launched = null;
+            if (!next.pkg().equals(launched)) throw new ControlLoop.TransientRead("已请求打开目标应用，但它还没有进入前台");
         } else if (snapshot != null && !snapshot.equals(next)) {
             throw new SecurityException("授权的前台窗口或显示尺寸已变化");
         }
         if (!permitted(next)) {
-            if (snapshot == null) return null;
+            if (snapshot == null) {
+                launched = null;
+                return null;
+            }
             throw new SecurityException("当前属于受保护的系统窗口，未读取或操作");
         }
         authorize(next);
         Bitmap bitmap = (Bitmap) XposedHelpers.callMethod(singleton(mapping.capture()), "takeScreenshotAndExcludeSelf",
                 next.width(), next.height(), display(), true, false);
-        if (bitmap == null) throw new SecurityException("原厂未返回屏幕内容");
+        if (bitmap == null) throw new ControlLoop.TransientRead("原厂暂未返回屏幕内容");
         try {
             if (bitmap.getWidth() != next.width() || bitmap.getHeight() != next.height() || !next.equals(foreground())) {
                 throw new SecurityException("屏幕和授权窗口不一致");
             }
             snapshot = next;
+            launched = null;
             return bitmap;
         } catch (RuntimeException error) {
             bitmap.recycle();

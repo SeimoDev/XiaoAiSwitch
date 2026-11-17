@@ -9,6 +9,20 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class AivsProtocolTest {
+    @Test public void queryPreludeUsesNativeQueryOperationWithOneBubblePerReply() {
+        JSONArray before = AivsProtocol.queryPrelude("DIALOG_B", "用户输入原文");
+        assertEquals(4, before.length());
+        assertEquals("StartPreStream", before.getJSONObject(0).getJSONObject("header").getString("name"));
+        assertEquals("ExpectStream", before.getJSONObject(1).getJSONObject("header").getString("name"));
+        JSONObject query = before.getJSONObject(2);
+        assertEquals("Template", query.getJSONObject("header").getString("namespace"));
+        assertEquals("Query", query.getJSONObject("header").getString("name"));
+        assertEquals("用户输入原文", query.getJSONObject("payload").getString("text"));
+        assertEquals("FinishPreStream", before.getJSONObject(3).getJSONObject("header").getString("name"));
+        for (int index = 0; index < before.length(); index++) {
+            assertEquals("DIALOG_B", before.getJSONObject(index).getJSONObject("header").getString("dialog_id"));
+        }
+    }
     @Test public void streamingUsesNativeLifecycleAndOnlySendsEachDeltaOnce() {
         JSONArray start = AivsProtocol.streamStart("DIALOG");
         JSONArray first = AivsProtocol.streamDelta("DIALOG", "第一段");

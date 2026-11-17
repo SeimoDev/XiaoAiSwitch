@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--full-screen", action="store_true", help="Start the original full-screen XiaoAi before the control fixture request.")
     parser.add_argument("--reopen-board", action="store_true", help="Reopen the original assistant board while the first model call is paused.")
     parser.add_argument("--control-launch", action="store_true", help="Open Clock and require a new frame before any further input.")
+    parser.add_argument("--control-retry", action="store_true", help="Measure the three retries of a failed control model request.")
     parser.add_argument("--microphone", action="store_true")
     parser.add_argument("--manual-microphone", action="store_true")
     parser.add_argument("--steps", type=int)
@@ -39,7 +40,7 @@ def main():
     args = parser.parse_args()
     if args.full_screen and not args.gesture:
         parser.error("--full-screen requires --gesture")
-    if (args.reopen_board or args.control_launch) and (not args.gesture or args.route != "control" or args.cancel or args.delegate):
+    if (args.reopen_board or args.control_launch or args.control_retry) and (not args.gesture or args.route != "control" or args.cancel or args.delegate):
         parser.error("control fixtures require --route control --gesture and no delegation or cancellation")
     if args.system and (args.route != "chat" or args.delegate or args.microphone or args.default_route not in (None, "chat")):
         parser.error("--system requires a standalone chat request")
@@ -138,7 +139,9 @@ def main():
             def bounds(description):
                 return [int(value) for value in fixture[description].split(",")]
 
-            if args.control_launch:
+            if args.control_retry:
+                args.query = "CONTROL_RETRY_FIXTURE"
+            elif args.control_launch:
                 args.query = "CONTROL_LAUNCH_FIXTURE"
             elif not args.cancel:
                 tap = bounds("increment")
@@ -178,6 +181,20 @@ def main():
         request = json.loads(observed[before])
         assert request["fixture_token_matches"], "Authorization did not reach fixture"
         assert request["body"]["model"] == config[args.route]["model"]
+        if args.control_retry:
+            until = time.monotonic() + 25
+            while time.monotonic() < until:
+                state = ET.fromstring(adb("shell", "run-as", app, "cat", "shared_prefs/switch.xml"))
+                if any(node.get("name") == "status" and node.text == "自定义请求失败：HttpError" for node in state):
+                    break
+                time.sleep(.2)
+            else:
+                raise AssertionError("The control request did not report its final failure")
+            attempts = [json.loads(line)["retry_received_at"] for line in records.read_text(encoding="utf-8").splitlines()[before:]]
+            assert len(attempts) == 4 and all(b - a >= 4.9 for a, b in zip(attempts, attempts[1:])), attempts
+            assert control_fixture()["count"] == "0"
+            print(json.dumps({"passed": True, "model_attempts": 4, "retry_delays_s": [round(b - a, 2) for a, b in zip(attempts, attempts[1:])]}))
+            return
         if args.reopen_board:
             root("am startservice -n com.miui.voiceassist/com.xiaomi.voiceassistant.SpeechQueryService "
                  "-a io.github.xiaoaiswitch.FIXTURE --es mode reopen_control_board --es nonce " + config["fixtureNonce"])

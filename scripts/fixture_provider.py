@@ -117,10 +117,17 @@ class Handler(BaseHTTPRequestHandler):
             token = "FIXTURE_CONTROL_TOKEN"
         record = {"path": self.path, "body": recorded_body, "screens": screens, "image_inputs": image_inputs,
                   "fixture_token_matches": self.headers.get("Authorization") == "Bearer " + token}
+        retry_probe = phone_tools and any("CONTROL_RETRY_FIXTURE" in str(message.get("content", ""))
+                                          for message in body.get("messages", []))
+        if retry_probe:
+            record["retry_received_at"] = time.monotonic()
         with self.server.records.open("a", encoding="utf-8") as output:
             output.write(json.dumps(record, ensure_ascii=False) + "\n")
         if self.path.startswith("/failure/"):
             self.send_error(401, "fixture auth failure")
+            return
+        if retry_probe:
+            self.send_error(503, "fixture unavailable")
             return
         if body.get("model") == "FIXTURE_SYSTEM":
             if any(message.get("role") == "tool" for message in body["messages"]):

@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
@@ -16,6 +17,76 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class ControlLoopTest {
+    @Test public void retriesTemporaryNetworkFailureThreeTimesFiveSecondsApart() {
+        AtomicInteger calls = new AtomicInteger();
+        AtomicLong waited = new AtomicLong();
+        List<Integer> retries = new ArrayList<>();
+        ControlLoop.Environment environment = new ControlLoop.Environment() {
+            @Override public String screenshot() { return "screen"; }
+            @Override public JSONObject execute(ControlProtocol.Action action) { throw new AssertionError("No input before a valid result"); }
+        };
+        assertThrows(ModelClient.HttpError.class, () -> ControlLoop.run(Profile.parse(new JSONObject()), "task", environment,
+                12, () -> true, new ModelClient.Cancellation(), ignored -> {}, (profile, request, cancel) -> {
+                    calls.incrementAndGet();
+                    throw new ModelClient.HttpError(503);
+                }, retries::add, waited::addAndGet));
+        assertEquals(4, calls.get());
+        assertEquals(List.of(1, 2, 3), retries);
+        assertEquals(15000, waited.get());
+    }
+
+    @Test public void staleLaunchFrameIsRetriedWithoutRelaunching() throws Exception {
+        AtomicInteger captures = new AtomicInteger();
+        AtomicInteger launches = new AtomicInteger();
+        AtomicInteger calls = new AtomicInteger();
+        AtomicLong waited = new AtomicLong();
+        ControlLoop.Environment environment = new ControlLoop.Environment() {
+            @Override public String screenshot() {
+                int call = captures.getAndIncrement();
+                if (call == 0) return "BEFORE";
+                if (call < 3) throw new ControlLoop.TransientRead("目标应用仍在启动");
+                return "AFTER";
+            }
+            @Override public JSONObject execute(ControlProtocol.Action action) {
+                assertTrue(action instanceof ControlProtocol.OpenApp);
+                launches.incrementAndGet();
+                return new JSONObject().put("ok", true);
+            }
+        };
+        String finalText = ControlLoop.run(Profile.parse(new JSONObject()), "task", environment, 2,
+                () -> true, new ModelClient.Cancellation(), ignored -> {}, (profile, input, cancel) -> {
+                    if (calls.incrementAndGet() == 1) {
+                        return DialogueProtocolTest.response("open_app", new JSONObject().put("package", "io.github.xiaoaiswitch"));
+                    }
+                    assertTrue(input.toString().contains("AFTER"));
+                    return new JSONObject("{\"choices\":[{\"message\":{\"content\":\"完成\"}}]}");
+                }, ignored -> {}, waited::addAndGet);
+        assertEquals("完成", finalText);
+        assertEquals(1, launches.get());
+        assertEquals(10000, waited.get());
+        assertEquals(2, calls.get());
+    }
+
+    @Test public void permanentErrorsAreNotRetriedAndStoppingInterruptsBackoff() {
+        AtomicInteger calls = new AtomicInteger();
+        ControlLoop.Environment environment = new ControlLoop.Environment() {
+            @Override public String screenshot() { return "screen"; }
+            @Override public JSONObject execute(ControlProtocol.Action action) { throw new AssertionError("Test must not execute any operation"); }
+        };
+        assertThrows(ModelClient.HttpError.class, () -> ControlLoop.run(Profile.parse(new JSONObject()), "task", environment,
+                3, () -> true, new ModelClient.Cancellation(), ignored -> {}, (profile, input, cancel) -> {
+                    throw new ModelClient.HttpError(400);
+                }, ignored -> { throw new AssertionError("Permanent HTTP error must not be retried"); },
+                ignored -> { throw new AssertionError("Permanent HTTP error must not wait"); }));
+        ModelClient.Cancellation cancellation = new ModelClient.Cancellation();
+        assertThrows(CancellationException.class, () -> ControlLoop.run(Profile.parse(new JSONObject()), "task", environment,
+                3, () -> true, cancellation, ignored -> {}, (profile, input, cancel) -> {
+                    calls.incrementAndGet();
+                    throw new java.net.SocketTimeoutException();
+                }, ignored -> {}, ignored -> cancellation.cancel()));
+        assertEquals(1, calls.get());
+    }
+
     @Test public void protectedInitialScreenAndAppLaunchNeverUseOldCoordinates() throws Exception {
         assertLaunchRefreshesFrame(true);
         assertLaunchRefreshesFrame(false);
