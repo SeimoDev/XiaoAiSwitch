@@ -73,8 +73,8 @@ class SettingsActivity : ComponentActivity() {
     }
 }
 
-private val routeNames = listOf("文本", "语音", "绘图", "控制")
-private val routeDescriptions = listOf("日常问答与多轮对话", "原厂识别与音色，自选语言模型", "订阅或 API 的图片生成与编辑", "通过屏幕与工具执行手机任务")
+private val routeNames = listOf("文本", "语音", "绘图", "控制", "识图")
+private val routeDescriptions = listOf("日常问答与多轮对话", "原厂识别与音色，自选语言模型", "订阅或 API 的图片生成与编辑", "通过屏幕与工具执行手机任务", "图片问答与拍照识别，独立使用视觉模型")
 private val providerNames = listOf("API Key / OpenAI 兼容源", "Codex 订阅")
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -82,7 +82,8 @@ private val providerNames = listOf("API Key / OpenAI 兼容源", "Codex 订阅")
 private fun SettingsScreen() {
     val context = LocalContext.current
     val appName = stringResource(R.string.app_name)
-    val assistantVersion = remember(context) { runCatching { context.packageManager.getPackageInfo("com.miui.voiceassist", 0).versionName }.getOrNull() }
+    val assistant = remember(context) { runCatching { context.packageManager.getPackageInfo("com.miui.voiceassist", 0) }.getOrNull() }
+    val customControlSupported = assistant?.let { AssistantVersion.forCode(it.versionCode)?.phoneControl() } == true
     val preferences = remember { context.getSharedPreferences("switch", 0) }
     val initial = remember { runCatching { AiProviders.normalize(JSONObject(preferences.getString("config", "{}") ?: "{}")).toString() }.getOrDefault("{}") }
     var draft by rememberSaveable { mutableStateOf(initial) }
@@ -116,7 +117,7 @@ private fun SettingsScreen() {
     var seen by remember { mutableStateOf(preferences.getLong("seen", 0)) }
     var activeVersion by remember { mutableStateOf(preferences.getInt("activeVersion", 0)) }
     val active = activeVersion == BuildConfig.VERSION_CODE
-    val titles = listOf("文本对话", "语音对话", "绘图", "手机控制")
+    val titles = listOf("文本对话", "语音对话", "绘图", "手机控制", "识图")
     fun parent(screen: String) = when (screen) {
         "home" -> null
         "provider_edit" -> "providers"
@@ -293,7 +294,8 @@ private fun SettingsScreen() {
                 Text(when (selected) {
                     2 -> if (subscription) "手机直连 Codex 原生绘图，使用订阅额度；支持文生图与原图编辑，无需另填 API Key。"
                         else "图片 API 使用 prompt 字段；修改原图时自动请求 images/edits。"
-                    3 -> "控制模型需要支持图像与工具调用。"
+                    3 -> if (customControlSupported) "控制模型需要支持图像与工具调用。" else "当前小爱版本使用原厂控制；此处的模型配置会保留。"
+                    4 -> "请选择支持图片输入的视觉模型。启用后，普通附图问答自动走本通道，绘图和图生图不受影响。"
                     else -> if (subscription) "系统指令映射到 Codex instructions；登录凭据仅保存在手机。" else "作为独立的 system 消息发送，不拼接到用户问题。"
                 }, fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
             }
@@ -396,7 +398,7 @@ private fun SettingsScreen() {
                             }
                             "status" -> Section("Hook 状态") {
                                 Text("模块版本 · ${BuildConfig.VERSION_NAME}", modifier = Modifier.testTag("diagnostic_version"))
-                                Text("安装的小爱 · ${assistantVersion ?: "未安装"}", color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                                Text("安装的小爱 · ${assistant?.versionName ?: "未安装"}", color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                                 SelectionContainer { Text(hook, fontSize = 14.sp, modifier = Modifier.testTag("hook_status")) }
                                 if (seen != 0L) Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(seen)),
                                     fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)

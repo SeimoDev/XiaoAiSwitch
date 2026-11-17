@@ -92,7 +92,7 @@ class Handler(BaseHTTPRequestHandler):
         screens = []
         phone_tools = any(tool.get("function", {}).get("name") == "open_app" for tool in body.get("tools", []))
         delegate_tools = any(tool.get("function", {}).get("name") == "generate_image" or tool.get("function", {}).get("name") == "control_phone" for tool in body.get("tools", []))
-        if phone_tools or delegate_tools:
+        if phone_tools or delegate_tools or body.get("model") == "FIXTURE_VISION":
             from PIL import Image
             for message in recorded_body.get("messages", []):
                 if not isinstance(message.get("content"), list):
@@ -104,7 +104,8 @@ class Handler(BaseHTTPRequestHandler):
                     digest = hashlib.sha256(content).hexdigest()
                     image = Image.open(io.BytesIO(content))
                     screens.append({"sha256": digest, "bytes": len(content), "width": image.width, "height": image.height})
-                    self.server.records.parent.joinpath("control-screen-" + digest[:16] + ".jpg").write_bytes(content)
+                    if phone_tools or delegate_tools:
+                        self.server.records.parent.joinpath("control-screen-" + digest[:16] + ".jpg").write_bytes(content)
                     part["image_url"]["url"] = "<redacted screenshot sha256=" + digest + ">"
         token = "FIXTURE_TOKEN"
         if self.path.startswith("/planner/"):
@@ -120,7 +121,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/failure/"):
             self.send_error(401, "fixture auth failure")
             return
-        if delegate_tools:
+        if body.get("model") == "FIXTURE_VISION":
+            result = {"choices": [{"message": {"role": "assistant", "content": "VISION_FIXTURE_OK"}}]}
+        elif body.get("messages", [{}])[-1].get("content") == "VISION_ENGINE_SEED":
+            result = {"choices": [{"message": {"role": "assistant", "content": "VISION_SEED_OK"}}]}
+        elif delegate_tools:
             messages = body["messages"]
             user_index = max(index for index, message in enumerate(messages) if message.get("role") == "user")
             text = next((message["content"] for message in reversed(messages) if message.get("role") == "user"), "")

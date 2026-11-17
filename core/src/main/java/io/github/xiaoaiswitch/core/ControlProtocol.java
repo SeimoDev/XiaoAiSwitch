@@ -85,9 +85,15 @@ public final class ControlProtocol {
     }
 
     public static JSONObject visualMessage(String text, String screen) {
-        return new JSONObject().put("role", "user").put("content", new JSONArray()
-                .put(new JSONObject().put("type", "text").put("text", text))
-                .put(new JSONObject().put("type", "image_url").put("image_url", new JSONObject().put("url", screen))));
+        return visualMessage(text, java.util.Collections.singletonList(screen));
+    }
+
+    public static JSONObject visualMessage(String text, List<String> images) {
+        JSONArray content = new JSONArray().put(new JSONObject().put("type", "text").put("text", text));
+        for (String source : images) {
+            content.put(new JSONObject().put("type", "image_url").put("image_url", new JSONObject().put("url", source)));
+        }
+        return new JSONObject().put("role", "user").put("content", content);
     }
 
     private static JSONObject function(String name, String description, JSONObject properties, String... required) {

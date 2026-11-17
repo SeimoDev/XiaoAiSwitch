@@ -11,10 +11,14 @@ public final class DialogueProtocol {
     public record Task(String id, String route, String text, String image) {}
 
     public static JSONObject request(Profile profile, JSONArray history, String text, String image, boolean images, boolean control) {
+        return request(profile, history, text, image.isEmpty() ? java.util.Collections.emptyList() : java.util.Collections.singletonList(image), images, control);
+    }
+
+    public static JSONObject request(Profile profile, JSONArray history, String text, List<String> attachments, boolean images, boolean control) {
         JSONObject request = ChatProtocol.request(profile, history, text);
-        if (!image.isEmpty()) {
+        if (!attachments.isEmpty()) {
             JSONArray messages = request.getJSONArray("messages");
-            messages.put(messages.length() - 1, ControlProtocol.visualMessage(text, image));
+            messages.put(messages.length() - 1, ControlProtocol.visualMessage(text, attachments));
         }
         JSONArray tools = new JSONArray();
         if (images) tools.put(new JSONObject().put("type", "function").put("function", new JSONObject()

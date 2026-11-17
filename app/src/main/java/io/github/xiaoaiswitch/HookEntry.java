@@ -70,9 +70,13 @@ public final class HookEntry implements IXposedHookLoadPackage {
     }
 
     static void report(Context context, String text) {
+        report(context, text, false);
+    }
+
+    private static void report(Context context, String text, boolean ready) {
         try {
             Bundle extras = new Bundle();
-            extras.putInt("moduleVersion", BuildConfig.VERSION_CODE);
+            if (ready) extras.putInt("moduleVersion", BuildConfig.VERSION_CODE);
             context.getContentResolver().call(ConfigProvider.URI, "status", text, extras);
         } catch (RuntimeException error) {
             XposedBridge.log("XiaoAiSwitch: status provider " + error.getClass().getSimpleName());
@@ -124,7 +128,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 @Override protected void afterHookedMethod(MethodHookParam param) {
                     Object value = param.getObjectExtra("voice");
                     if (!(value instanceof VoiceRequest voice)) return;
-                    start(param.thisObject, voice.config(), voice.profile(), "voice", voice.dialog(), voice.text(), voice.input());
+                    start(param.thisObject, voice.config(), voice.profile(), voice.route(), voice.dialog(), voice.text(), voice.input(), true);
                 }
             });
             XposedHelpers.findAndHookMethod(engine.session(), loader, "clearSession", new XC_MethodHook() {
@@ -143,8 +147,8 @@ public final class HookEntry implements IXposedHookLoadPackage {
             if (!installOptional("Markdown", () -> ReplyMarkdown.install(loader, adapter.markdown()))) unavailable.add("Markdown");
             installOptional("测试入口", () -> FixtureSupport.install(context, loader, adapter));
             if (!adapter.phoneControl()) unavailable.add("自定义手机控制");
-            report(context, "已加载：AIVS 对话、语音与绘图 Hook；进程 " + android.os.Process.myPid()
-                    + (unavailable.isEmpty() ? "" : "；未接管：" + String.join("、", unavailable)));
+            report(context, "已加载：AIVS 对话、语音、识图与绘图 Hook；进程 " + android.os.Process.myPid()
+                    + (unavailable.isEmpty() ? "" : "；未接管：" + String.join("、", unavailable)), true);
         }
 
         private boolean installOptional(String name, Runnable install) {
@@ -242,24 +246,39 @@ public final class HookEntry implements IXposedHookLoadPackage {
         private void outbound(XC_MethodHook.MethodHookParam param) throws Exception {
             Object event = param.args[0];
             String name = (String) XposedHelpers.callMethod(event, "getFullName");
+            boolean nativeVision = name.equals("MultiModal.ImageUnderstand");
             if (!name.equals("Nlp.Request") && !name.equals("Nlp.RequestLargeLanguageModelContent")
-                    && !name.equals("SpeechRecognizer.Recognize") && !name.equals("MultiModal.ImageGeneration")) return;
+                    && !name.equals("SpeechRecognizer.Recognize") && !name.equals("MultiModal.ImageGeneration") && !nativeVision) return;
+            if (nativeVision && !images.isAttachmentQuery(event)) return;
             JSONObject config = config();
             if (!config.optBoolean("enabled", false)) {
                 generation.incrementAndGet();
                 cancelPending();
                 owned.clear();
+                report(context, "保留原厂：应用首页的模块接管已关闭");
                 return;
             }
             String dialog = (String) XposedHelpers.callMethod(event, "getId");
+            ImageBridge.Input input = images.inspect(event);
+            boolean visionEnabled = profile(config, "vision").enabled();
+            if (nativeVision && !visionEnabled) {
+                report(context, "保留原厂：未启用自定义识图模型");
+                return;
+            }
+            boolean nativeDrawing = !nativeVision && input.drawing();
+            boolean useVision = (nativeVision || (!input.ids().isEmpty() && !nativeDrawing)) && visionEnabled;
             if (name.equals("SpeechRecognizer.Recognize")) {
-                boolean thinking = ThinkingMode.isThinking(event, loader, adapter.dialogContext());
-                if (!ModeProfiles.resolve(config, "voice", thinking).enabled()) return;
+                String route = useVision ? "vision" : "voice";
+                boolean thinking = !useVision && ThinkingMode.isThinking(event, loader, adapter.dialogContext());
+                if (!ModeProfiles.resolve(config, route, thinking).enabled()) {
+                    report(context, "保留原厂：语音通道未开启自定义模型");
+                    return;
+                }
                 onlyAsr(event);
                 generation.incrementAndGet();
                 cancelPending();
                 own(dialog, "voice-pending");
-                voiceInputs.put(dialog, new PendingVoice(images.inspect(event), thinking));
+                voiceInputs.put(dialog, new PendingVoice(input, thinking, route));
                 synchronized (voiceInputs) {
                     while (voiceInputs.size() > 64) voiceInputs.remove(voiceInputs.keySet().iterator().next());
                 }
@@ -267,14 +286,21 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 return;
             }
             String text = images.query(event);
-            ImageBridge.Input input = images.inspect(event);
-            QueryRouter.Selection selection = QueryRouter.select(text == null ? "" : text, config.optString("defaultRoute", "chat"), input.drawing());
-            if (selection.route().equals("control") && !adapter.phoneControl()) return;
+            if (nativeVision && (text == null || text.trim().isEmpty())) text = "请描述这张图片。";
+            QueryRouter.Selection selection = QueryRouter.select(text == null ? "" : text,
+                    config.optString("defaultRoute", "chat"), nativeDrawing, useVision);
+            if (selection.route().equals("control") && !adapter.phoneControl()) {
+                report(context, "保留原厂：当前小爱版本未启用自定义手机控制");
+                return;
+            }
             boolean thinking = (selection.route().equals("chat") || selection.route().equals("voice"))
                     && ThinkingMode.isThinking(event, loader, adapter.dialogContext());
             Profile profile = ModeProfiles.resolve(config, selection.route(), thinking);
-            if (!profile.enabled()) return;
-            start(param.thisObject, config, profile, selection.route(), dialog, selection.text(), input);
+            if (!profile.enabled()) {
+                report(context, "保留原厂：通道未启用自定义模型（" + selection.route() + "）");
+                return;
+            }
+            start(param.thisObject, config, profile, selection.route(), dialog, selection.text(), input, selection.route().equals("voice"));
             param.setResult(true);
         }
 
@@ -321,9 +347,10 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 }
                 JSONObject config = config();
                 PendingVoice pending = voiceInputs.remove(dialog);
-                Profile profile = ModeProfiles.resolve(config, "voice", pending != null && pending.thinking());
+                String route = pending == null ? "voice" : pending.route();
+                Profile profile = ModeProfiles.resolve(config, route, pending != null && pending.thinking());
                 if (!config.optBoolean("enabled", false) || !profile.enabled()) return;
-                param.setObjectExtra("voice", new VoiceRequest(config, profile, dialog, text, pending == null ? ImageBridge.NONE : pending.input()));
+                param.setObjectExtra("voice", new VoiceRequest(config, profile, route, dialog, text, pending == null ? ImageBridge.NONE : pending.input()));
                 return;
             }
             if (name.equals("SpeechRecognizer.StopCapture") || name.equals("SpeechRecognizer.ExpectSpeech")) return;
@@ -331,8 +358,8 @@ public final class HookEntry implements IXposedHookLoadPackage {
             param.setResult(null);
         }
 
-        private record VoiceRequest(JSONObject config, Profile profile, String dialog, String text, ImageBridge.Input input) {}
-        private record PendingVoice(ImageBridge.Input input, boolean thinking) {}
+        private record VoiceRequest(JSONObject config, Profile profile, String route, String dialog, String text, ImageBridge.Input input) {}
+        private record PendingVoice(ImageBridge.Input input, boolean thinking, String route) {}
 
         private void own(String dialog, String route) {
             synchronized (owned) {
@@ -341,7 +368,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
             }
         }
 
-        private void start(Object engine, JSONObject config, Profile profile, String route, String dialog, String text, ImageBridge.Input input) {
+        private void start(Object engine, JSONObject config, Profile profile, String route, String dialog, String text, ImageBridge.Input input, boolean speak) {
             own(dialog, route);
             long request = generation.incrementAndGet();
             cancelPending();
@@ -370,6 +397,11 @@ public final class HookEntry implements IXposedHookLoadPackage {
                         return;
                     }
                     List<ModelClient.Image> attached = images.load(input, cancellation);
+                    if (route.equals("vision") && attached.isEmpty()) {
+                        deliver(engine, request, AivsProtocol.textResponse(dialog, text, "请先添加图片，再使用识图模型。"), false, "");
+                        report(context, "识图未执行：没有图片附件");
+                        return;
+                    }
                     if (route.equals("image")) {
                         List<String> result = generate(config, profile, text, attached, request, cancellation);
                         deliver(engine, request, AivsProtocol.imageResponse(dialog, text, result), false, "");
@@ -378,9 +410,12 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     }
                     Profile imageProfile = profile(config, "image");
                     Profile controlProfile = profile(config, "control");
-                    boolean imageTool = config.optBoolean("autoRoute", true) && imageProfile.enabled();
-                    boolean controlTool = adapter.phoneControl() && config.optBoolean("autoRoute", true) && controlProfile.enabled();
-                    JSONObject body = DialogueProtocol.request(profile, prior, text, attached.isEmpty() ? "" : ImageBridge.dataUrl(attached.get(0)), imageTool, controlTool);
+                    boolean auto = !route.equals("vision") && config.optBoolean("autoRoute", true);
+                    boolean imageTool = auto && imageProfile.enabled();
+                    boolean controlTool = auto && adapter.phoneControl() && controlProfile.enabled();
+                    List<String> attachments = new ArrayList<>();
+                    for (ModelClient.Image image : attached) attachments.add(ImageBridge.dataUrl(image));
+                    JSONObject body = DialogueProtocol.request(profile, prior, text, attachments, imageTool, controlTool);
                     DialogueLoop.Result result = DialogueLoop.run(profile, body, imageTool, controlTool, task -> {
                         requireCurrent(request, config);
                         if (task.route().equals("control")) {
@@ -401,13 +436,16 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     requireCurrent(request, config);
                     synchronized (histories) { histories.put(route, ChatProtocol.history(body, result.text())); }
                     deliver(engine, request, result.images().isEmpty() ? AivsProtocol.textResponse(dialog, text, result.text())
-                            : AivsProtocol.richResponse(dialog, text, result.text(), result.images()), route.equals("voice"), result.text());
+                            : AivsProtocol.richResponse(dialog, text, result.text(), result.images()), speak, result.text());
                     report(context, "自定义请求成功：" + route + " / " + profile.model());
                 } catch (Exception error) {
                     if (!current(request, config.optLong("revision"))) return;
+                    String message = error instanceof ControlLoop.StepLimit || error instanceof ModelClient.HttpError
+                            || error instanceof CodexClient.LoginRequired || error instanceof SecurityException ? error.getMessage()
+                            : "模型请求失败（" + error.getClass().getSimpleName() + "），请检查配置和服务状态。";
+                    if (route.equals("vision") && error instanceof ModelClient.HttpError) message += "。请确认所选模型支持图片输入。";
                     deliver(engine, request, AivsProtocol.textResponse(dialog, text,
-                            error instanceof ControlLoop.StepLimit || error instanceof ModelClient.HttpError || error instanceof CodexClient.LoginRequired || error instanceof SecurityException ? error.getMessage()
-                                    : "模型请求失败（" + error.getClass().getSimpleName() + "），请检查配置和服务状态。"), false, "");
+                            message), false, "");
                     report(context, error instanceof SecurityException ? "操作已停止：" + error.getMessage()
                             : "自定义请求失败：" + error.getClass().getSimpleName());
                 } finally {

@@ -1,5 +1,6 @@
 package io.github.xiaoaiswitch.core;
 
+import java.util.List;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
@@ -9,6 +10,20 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class DialogueProtocolTest {
+    @Test public void visionRequestPreservesEveryAttachedImageForCompatibleAndCodexProviders() {
+        Profile profile = Profile.parse(new JSONObject().put("model", "VISION_MODEL").put("systemPrompt", "VISION_ONLY"));
+        JSONObject request = DialogueProtocol.request(profile, new JSONArray(), "比较两张图", List.of(
+                "data:image/png;base64,AQID", "data:image/jpeg;base64,BAUG"), false, false);
+        JSONArray messages = request.getJSONArray("messages");
+        JSONArray content = messages.getJSONObject(1).getJSONArray("content");
+        assertEquals("VISION_ONLY", messages.getJSONObject(0).getString("content"));
+        assertEquals("比较两张图", content.getJSONObject(0).getString("text"));
+        assertEquals("data:image/jpeg;base64,BAUG", content.getJSONObject(2).getJSONObject("image_url").getString("url"));
+        JSONArray codex = CodexProtocol.request(request).getJSONArray("input").getJSONObject(0).getJSONArray("content");
+        assertEquals("input_image", codex.getJSONObject(1).getString("type"));
+        assertEquals("data:image/jpeg;base64,BAUG", codex.getJSONObject(2).getString("image_url"));
+    }
+
     private final Profile profile = Profile.parse(new JSONObject().put("model", "CHAT").put("systemPrompt", "MY_SYSTEM"));
 
     @Test public void delegatesUsingToolsWithoutReplacingConfiguredSystemPrompt() {

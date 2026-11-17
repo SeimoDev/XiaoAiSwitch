@@ -40,6 +40,10 @@ final class FixtureSupport {
                     HookEntry.report(context, "THINKING_MODE_FIXTURE " + state);
                     return;
                 }
+                if ("native_vision".equals(mode) && config.optBoolean("enabled", false)) {
+                    NativeVisionFixture.send(context, loader, adapter, nonce, intent.getStringExtra("query"));
+                    return;
+                }
                 if (!"web_image".equals(mode) || !config.optBoolean("enabled", false)
                         || config.optJSONObject("image") == null || !config.getJSONObject("image").optBoolean("enabled", false)) return;
                 Object producer = XposedHelpers.getStaticObjectField(XposedHelpers.findClass(adapter.images().producer(), loader), "a");

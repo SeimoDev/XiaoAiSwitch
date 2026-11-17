@@ -3,7 +3,7 @@
 
 def with_registry(config):
     config["providers"] = {}
-    for route in ["chat", "voice", "image", "control"]:
+    for route in ["chat", "voice", "image", "control", "vision"]:
         normal = config.get(route)
         if normal is None:
             continue

@@ -56,6 +56,11 @@ def main():
         raise AssertionError("UIAutomator did not get an idle window; see the saved screenshot")
 
     app = "io.github.xiaoaiswitch"
+
+    def control_fixture():
+        state = ET.fromstring(adb("shell", "run-as", app, "cat", "shared_prefs/control_fixture.xml"))
+        return {node.get("name"): node.get("value", node.text) for node in state}
+
     records = Path(args.records)
     before = len(records.read_text(encoding="utf-8").splitlines()) if records.exists() else 0
     backup = root(f"if [ -f /data/user/0/{app}/shared_prefs/switch.xml ]; then cat /data/user/0/{app}/shared_prefs/switch.xml; else echo '<map />'; fi")
@@ -92,22 +97,27 @@ def main():
             adb("shell", "am", "start", "-n", app + "/.ControlFixtureActivity", "--ez", "play_audio", "true")
         if args.gesture:
             adb("shell", "am", "force-stop", "com.miui.voiceassist")
-            adb("shell", "am", "start", "-n", app + "/.ControlFixtureActivity")
-            tree = capture(args.name + "-fixture")
-            from PIL import Image
-            width, height = Image.open(directory / (args.name + "-fixture.png")).size
+            adb("shell", "am", "start", "-W", "-n", app + "/.ControlFixtureActivity")
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                fixture = control_fixture()
+                if all(key in fixture for key in ("increment", "input", "scrollArea", "displayWidth", "displayHeight")):
+                    break
+                time.sleep(.1)
+            assert "increment" in fixture, "Fixture did not report laid-out controls"
+            width, height = int(fixture["displayWidth"]), int(fixture["displayHeight"])
 
             def bounds(description):
-                node = next(node for node in tree.iter("node") if node.get("content-desc") == description)
-                return [int(value) for value in re.findall(r"\d+", node.get("bounds"))]
+                return [int(value) for value in fixture[description].split(",")]
 
-            tap = bounds("fixture increment")
-            field = bounds("fixture input")
-            scroll = bounds("fixture scroll")
-            args.query = "CONTROL_GESTURE " + json.dumps({"tap": [(tap[0] + tap[2]) / 2 / width, (tap[1] + tap[3]) / 2 / height],
-                "input": [(field[0] + field[2]) / 2 / width, (field[1] + field[3]) / 2 / height],
-                "swipe": [(scroll[0] + scroll[2]) / 2 / width, (scroll[1] + (scroll[3] - scroll[1]) * .85) / height,
-                          (scroll[0] + scroll[2]) / 2 / width, (scroll[1] + (scroll[3] - scroll[1]) * .25) / height]})
+            if not args.cancel:
+                tap = bounds("increment")
+                field = bounds("input")
+                scroll = bounds("scrollArea")
+                args.query = "CONTROL_GESTURE " + json.dumps({"tap": [(tap[0] + tap[2]) / 2 / width, (tap[1] + tap[3]) / 2 / height],
+                    "input": [(field[0] + field[2]) / 2 / width, (field[1] + field[3]) / 2 / height],
+                    "swipe": [(scroll[0] + scroll[2]) / 2 / width, (scroll[1] + (scroll[3] - scroll[1]) * .85) / height,
+                              (scroll[0] + scroll[2]) / 2 / width, (scroll[1] + (scroll[3] - scroll[1]) * .25) / height]})
         root("am start -W -n com.miui.voiceassist/com.xiaomi.voiceassistant.mainui.home.FloatActivity")
         if args.microphone:
             root("am startservice -n com.miui.voiceassist/com.xiaomi.voiceassistant.VoiceService "
@@ -214,14 +224,12 @@ def main():
                     return
                 if args.cancel:
                     dump = root("dumpsys window windows").decode("utf-8")
-                    directory.joinpath(args.name + "-windows.txt").write_text(dump, encoding="utf-8")
                     blocks = re.split(r"\n  Window #\d+ ", dump)
                     window = next((block for block in blocks if "XiaoAiSwitch Control Stop" in block.splitlines()[0]), "")
                     bounds = re.search(r"(?:frame|mFrame)=\[(\d+),(\d+)\]\[(\d+),(\d+)\]", window)
-                    assert bounds, "Stop control bounds not found; see saved window dump"
+                    assert bounds, "Stop control bounds not found"
                     x1, y1, x2, y2 = map(int, bounds.groups())
                     # The stock PAG runs continuously; a UIAutomator idle wait here can outlast the delayed response.
-                    directory.joinpath(args.name + "-inflight.png").write_bytes(adb("exec-out", "screencap", "-p"))
                     adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
                     deadline = time.monotonic() + 5
                     while time.monotonic() < deadline:
@@ -234,7 +242,8 @@ def main():
                     time.sleep(8.5)
                     assert len(records.read_text(encoding="utf-8").splitlines()) == before + 1, "Cancelled task made another model call"
                     assert "com.android.settings" not in root("dumpsys activity activities | grep topResumedActivity").decode("utf-8")
-                    capture(args.name + "-restored")
+                    if args.gesture:
+                        assert control_fixture()["count"] == "0", "A gesture arrived after stopping"
                     print(json.dumps({"passed": True, "route": "control", "cancelled": True}, ensure_ascii=False))
                     return
                 deadline = time.monotonic() + 35
@@ -249,12 +258,13 @@ def main():
                 assert len(results) == (6 if args.gesture else 3) and all(result.get("ok") for result in results), results
                 assert len({screen["sha256"] for screen in final["screens"]}) >= 2, "Screen state never changed"
                 if args.gesture:
-                    state = ET.fromstring(adb("shell", "run-as", app, "cat", "shared_prefs/control_fixture.xml"))
-                    values = {node.get("name"): node.get("value", node.text) for node in state}
+                    values = control_fixture()
                     directory.joinpath(args.name + "-fixture-state.json").write_text(json.dumps(values, ensure_ascii=False), encoding="utf-8")
                     assert values["count"] == "1", values
                     assert values["text"] == "控制测试XASWITCH", values
                     assert int(values["scroll"]) > 0, values
+                    print(json.dumps({"passed": True, "route": "control", "gesture": True}, ensure_ascii=False))
+                    return
         time.sleep(1)
         tree = capture(args.name)
         texts = [node.get("text", "") for node in tree.iter("node")]

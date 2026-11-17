@@ -6,7 +6,7 @@ import org.json.JSONObject;
 /** Validates an editable UI draft only when it is committed to runtime configuration. */
 public final class SettingsConfig {
     private SettingsConfig() {}
-    public static final List<String> ROUTES = List.of("chat", "voice", "image", "control");
+    public static final List<String> ROUTES = List.of("chat", "voice", "image", "control", "vision");
 
     public static JSONObject save(JSONObject draft, long revision) {
         JSONObject result = new JSONObject(draft.toString());

@@ -4,14 +4,14 @@
 
 [![开源协议：GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?logo=gnu)](LICENSE)
 [![Android 构建状态](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml/badge.svg?branch=dev)](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml)
-[![源码版本：0.10.3](https://img.shields.io/badge/version-0.10.3-blue)](app/build.gradle)
+[![源码版本：0.10.4](https://img.shields.io/badge/version-0.10.4-blue)](app/build.gradle)
 [![Android API 27+](https://img.shields.io/badge/Android-API%2027%2B-3DDC84?logo=android&logoColor=white)](#兼容性)
 [![LSPosed 模块](https://img.shields.io/badge/LSPosed-Xposed%20API%2082-orange)](#兼容性)
 [![GitHub Stars](https://img.shields.io/github/stars/SeimoDev/XiaoAiSwitch?logo=github)](https://github.com/SeimoDev/XiaoAiSwitch/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/SeimoDev/XiaoAiSwitch?logo=github)](https://github.com/SeimoDev/XiaoAiSwitch/forks)
 [![GitHub Issues](https://img.shields.io/github/issues/SeimoDev/XiaoAiSwitch)](https://github.com/SeimoDev/XiaoAiSwitch/issues)
 
-自定义超级小爱的文本、语音、绘图和手机控制模型。用一个 LSPosed 模块管理 AI Provider、模型与 System Prompt，结果仍在小爱的原生界面显示。
+自定义超级小爱的文本、语音、识图、绘图和手机控制模型。用一个 LSPosed 模块管理 AI Provider、模型与 System Prompt，结果仍在小爱的原生界面显示。
 
 [使用方法](#使用方法) · [从源码构建](#从源码构建) · [贡献指南](CONTRIBUTING.md) · [反馈问题](https://github.com/SeimoDev/XiaoAiSwitch/issues/new) · [Star 趋势](#star-趋势)
 
@@ -19,6 +19,7 @@
 
 - **模型管理**：兼容 OpenAI API，也支持在手机独立登录并直连 Codex 订阅。文本和语音的默认／思考模式可分别选模型和提示词。
 - **文本与语音**：文本回答使用原生 Markdown 排版；语音保留小爱的语音识别和 TTS。
+- **识图**：可为小爱的图片问答单独选择支持图片输入的模型。绘图和图生图仍使用「绘图」配置。
 - **绘图**：支持文生图、原图编辑和放大预览。可用独立图片 API，或直接使用 Codex 订阅绘图。
 - **手机控制**：支持截图、点击、滑动和输入；沿用原厂 AI 智控权限和全局光效，可随时停止。
 
@@ -28,7 +29,7 @@
 | --- | --- |
 | 应用包名 | `io.github.xiaoaiswitch` |
 | 小爱作用域 | `com.miui.voiceassist` |
-| 已适配小爱版本 | `7.11.20.3514`（`507011020`）；`8.2.70.8421`（`508002070`，对话、语音和绘图；手机控制走原厂） |
+| 已适配小爱版本 | `7.11.20.3514`（`507011020`）；`8.2.70.8421`（`508002070`，对话、语音、识图和绘图；手机控制走原厂） |
 | Android SDK | `minSdk 27` · `targetSdk 35` · `compileSdk 36` |
 | 模块加载 | LSPosed，声明最低 Xposed API 82 |
 | 真机验证 | 小米平板 5（Android 16、LSPosed 2.2.1）；`2304FPN6DC`（[8.2 验证记录](analysis/voiceassist-8.2.md)） |
@@ -49,6 +50,7 @@
 | --- | --- |
 | API Endpoint / API Token | 在 Provider 中统一配置。例如 `https://HOST/v1`；对话也接受完整的 `/chat/completions` 地址。 |
 | Model / System Prompt | 每个通道和模式独立选择。兼容对话源发送 `role: system`；绘图使用提示词前缀。 |
+| 识图 | 在首页进入「识图」，启用并选择支持图片输入的模型。之后在小爱的图片问答入口添加照片。未启用时保留原厂识图。 |
 | 默认通道 / 自动分流 | 在通用设置配置。自动分流没有固定调用上限；模型给出最终答复或任务取消时结束。也可用 `/chat 文本`、`/voice 文本`、`/draw 描述`、`/control 任务` 显式切换。 |
 | 手机控制 | 模型需支持图像和工具调用；可在通用设置填写调用上限（正整数，默认 12 次），达到后自动停止。也可手动中止。 |
 
@@ -74,6 +76,7 @@ adb -s SERIAL install -r app/build/outputs/apk/debug/app-debug.apk
 
 - [贡献指南](CONTRIBUTING.md) · [问题反馈](https://github.com/SeimoDev/XiaoAiSwitch/issues)
 - [AI Provider 注册表](analysis/provider-registry.md) · [默认与思考模式](analysis/thinking-modes.md) · [Codex 订阅绘图](analysis/codex-images.md)
+- [新旧版识图适配](analysis/vision-native-pipeline.md)
 - [小爱 AIVS 协议](https://developers.xiaoai.mi.com/documents/Home?type=%2Fapi%2Fdoc%2Frender_markdown%2FVoiceserviceAccess%2FDevice%2Fdevelop%2FProtocolDocument%2FEndpointOverview) · [LSPosed 模块作用域](https://github.com/LSPosed/LSPosed/wiki/Module-Scope)
 
 ## 开源协议

@@ -14,6 +14,7 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -36,27 +37,54 @@ final class ImageBridge {
         XposedHelpers.findAndHookMethod(mapping.producer(), loader, "saveImageLocalPath", String.class, String.class, new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) { remember((String) param.args[0], (String) param.args[1]); }
         });
+        boolean v8 = mapping.producer().equals("sj1.b");
+        XposedHelpers.findAndHookMethod(v8 ? "dp1.d3" : "zj0.m1", loader, "setMultiModalChain",
+                v8 ? "ap1.k" : "wj0.j", new XC_MethodHook() {
+            @Override protected void afterHookedMethod(MethodHookParam param) { rememberChain(param.args[0]); }
+        });
     }
 
     private void remember(String id, String path) {
-        if (id.isEmpty() || path.isEmpty()) return;
+        if (id == null || path == null || id.isEmpty() || path.isEmpty()) return;
         synchronized (paths) {
             paths.put(id, path);
             while (paths.size() > 64) paths.remove(paths.keySet().iterator().next());
         }
     }
 
+    private void rememberChain(Object chain) {
+        if (chain == null) return;
+        Object output = XposedHelpers.callMethod(chain, "getMultiModalOutputInfo");
+        if (output == null) return;
+        Object data = XposedHelpers.callMethod(output, "getOutputData");
+        if (data == null) return;
+        Object media = XposedHelpers.callMethod(data, "getMultimodalMediaEntity");
+        if (media == null) return;
+        Object input = XposedHelpers.callMethod(chain, "getMultiModalInputInfo");
+        if (input == null) return;
+        Object source = XposedHelpers.callMethod(input, "getInputData");
+        if (source == null) return;
+        remember((String) XposedHelpers.callMethod(media, "getFileId"), (String) XposedHelpers.callMethod(source, "getFilePath"));
+    }
+
     Input inspect(Object event) {
         String name = (String) XposedHelpers.callMethod(event, "getFullName");
-        if (name.equals("MultiModal.ImageGeneration")) {
-            Object ids = value(XposedHelpers.callMethod(XposedHelpers.callMethod(event, "getPayload"), "getImageIds"));
-            List<String> result = new ArrayList<>();
-            if (ids != null) for (Object id : (List<?>) ids) result.add((String) id);
-            return new Input(result, !result.isEmpty(), true);
+        LinkedHashSet<String> ids = new LinkedHashSet<>();
+        boolean drawing = name.equals("MultiModal.ImageGeneration");
+        boolean understanding = name.equals("MultiModal.ImageUnderstand");
+        boolean editing = false;
+        if (drawing || understanding) {
+            Object images = XposedHelpers.callMethod(XposedHelpers.callMethod(event, "getPayload"), "getImageIds");
+            // ImageUnderstand.image_ids is required; ImageGeneration.image_ids is optional.
+            Object values = drawing ? value(images) : images;
+            if (values instanceof List<?> list) for (Object id : list) {
+                if (id instanceof String text && !text.isEmpty()) ids.add(text);
+            }
+            if (understanding) return ids.isEmpty() ? NONE : new Input(List.copyOf(ids), false, false);
+            editing = drawing && !ids.isEmpty();
         }
         Object contexts = XposedHelpers.callMethod(event, "getContexts");
-        if (!(contexts instanceof List<?> list)) return NONE;
-        for (Object nativeContext : list) {
+        if (contexts instanceof List<?> list) for (Object nativeContext : list) {
             if (!"MultiModal.MultiModalState".equals(XposedHelpers.callMethod(nativeContext, "getFullName"))) continue;
             Object state = XposedHelpers.callMethod(nativeContext, "getPayload");
             Object scene = value(XposedHelpers.callMethod(state, "getGenerateImageScene"));
@@ -64,22 +92,38 @@ final class ImageBridge {
             Object info = value(XposedHelpers.callMethod(state, "getImageInfo"));
             String id = info == null ? null : (String) value(XposedHelpers.callMethod(info, "getImageId"));
             if (id == null) id = (String) value(XposedHelpers.callMethod(state, "getImageId"));
-            return new Input(id == null || id.isEmpty() ? Collections.emptyList() : Collections.singletonList(id),
-                    kind.equals("EDIT_IMG"), kind.equals("EDIT_IMG") || kind.equals("CREATE_IMG"));
+            if (id != null && !id.isEmpty()) ids.add(id);
+            editing |= kind.equals("EDIT_IMG");
+            drawing |= kind.equals("EDIT_IMG") || kind.equals("CREATE_IMG");
         }
-        return NONE;
+        return ids.isEmpty() && !drawing ? NONE : new Input(List.copyOf(ids), editing, drawing);
     }
 
     String query(Object event) {
         Object query = XposedHelpers.callMethod(XposedHelpers.callMethod(event, "getPayload"), "getQuery");
-        return "MultiModal.ImageGeneration".equals(XposedHelpers.callMethod(event, "getFullName")) ? (String) value(query) : (String) query;
+        return query instanceof String text ? text : (String) value(query);
+    }
+
+    boolean isAttachmentQuery(Object event) {
+        Object payload = XposedHelpers.callMethod(event, "getPayload");
+        // Screen access checks and linked OCR requests must follow the original assistant flow.
+        if (value(XposedHelpers.callMethod(payload, "getCheckAccessResultCode")) != null) return false;
+        Object contexts = XposedHelpers.callMethod(event, "getContexts");
+        if (contexts instanceof List<?> list) for (Object item : list) {
+            if ("Sys.EventRoute".equals(XposedHelpers.callMethod(item, "getFullName"))) return false;
+        }
+        return true;
     }
 
     List<ModelClient.Image> load(Input input, ModelClient.Cancellation cancellation) throws Exception {
         List<ModelClient.Image> result = new ArrayList<>();
         for (String id : input.ids()) {
-            String path = (String) XposedHelpers.callStaticMethod(XposedHelpers.findClass(mapping.preferences(), loader), "getString", id, "");
-            if (path.isEmpty()) path = paths.get(id);
+            String path = paths.get(id);
+            if (path == null || path.isEmpty()) path = (String) XposedHelpers.callStaticMethod(
+                    XposedHelpers.findClass(mapping.preferences(), loader), "getString", id, "");
+            // Ordinary attachments use image_cache_index, not the drawing module's default MMKV.
+            if (path == null || path.isEmpty()) path = (String) XposedHelpers.callStaticMethod(XposedHelpers.findClass(
+                    mapping.preferences() + (mapping.producer().equals("sj1.b") ? "$f0" : "$d0"), loader), "getImageCacheIndex", id);
             if (path == null || path.isEmpty()) throw new IllegalStateException("未找到原图，请重新选择图片");
             result.add(loadSource(path, cancellation));
         }
@@ -114,6 +158,7 @@ final class ImageBridge {
     static String dataUrl(ModelClient.Image image) { return "data:" + image.mime() + ";base64," + Base64.encodeToString(image.bytes(), Base64.NO_WRAP); }
 
     private Object value(Object optional) {
+        if (optional == null) return null;
         return Boolean.TRUE.equals(XposedHelpers.callMethod(optional, "isPresent")) ? XposedHelpers.callMethod(optional, "get") : null;
     }
 }

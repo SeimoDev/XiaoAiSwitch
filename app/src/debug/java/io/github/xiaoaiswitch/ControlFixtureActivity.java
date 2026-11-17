@@ -8,6 +8,10 @@ import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.util.DisplayMetrics;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -24,6 +28,7 @@ public final class ControlFixtureActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         getSharedPreferences("control_fixture", 0).edit().clear().putInt("count", 0).putInt("scroll", 0).apply();
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(32, 100, 32, 80);
@@ -71,12 +76,33 @@ public final class ControlFixtureActivity extends Activity {
         scroll.setOnScrollChangeListener((view, x, y, oldX, oldY) ->
                 getSharedPreferences("control_fixture", 0).edit().putInt("scroll", y).apply());
         layout.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        layout.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            DisplayMetrics display = new DisplayMetrics();
+            getWindowManager().getDefaultDisplay().getRealMetrics(display);
+            getSharedPreferences("control_fixture", 0).edit()
+                    .putString("increment", bounds(increment)).putString("input", bounds(input)).putString("scrollArea", bounds(scroll))
+                    .putInt("displayWidth", display.widthPixels).putInt("displayHeight", display.heightPixels).apply();
+        });
         setContentView(layout);
         if (getIntent().getBooleanExtra("play_audio", false)) {
             getSharedPreferences("voice_fixture", 0).edit().clear().apply();
             audioWait = System.currentTimeMillis();
             timer.postDelayed(this::awaitAsr, 100);
         }
+    }
+
+    private String bounds(View view) {
+        int[] location = new int[2];
+        view.getLocationOnScreen(location);
+        return location[0] + "," + location[1] + "," + (location[0] + view.getWidth()) + "," + (location[1] + view.getHeight());
+    }
+
+    @Override public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            getSharedPreferences("control_fixture", 0).edit()
+                    .putInt("lastTouchX", Math.round(event.getRawX())).putInt("lastTouchY", Math.round(event.getRawY())).apply();
+        }
+        return super.dispatchTouchEvent(event);
     }
 
     private void awaitAsr() {
