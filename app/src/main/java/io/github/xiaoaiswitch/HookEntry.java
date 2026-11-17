@@ -311,8 +311,8 @@ public final class HookEntry implements IXposedHookLoadPackage {
             if (nativeVision && (text == null || text.trim().isEmpty())) text = "请描述这张图片。";
             QueryRouter.Selection selection = QueryRouter.select(text == null ? "" : text,
                     config.optString("defaultRoute", "chat"), nativeDrawing, useVision);
-            if (selection.route().equals("control") && !adapter.phoneControl()) {
-                report(context, "保留原厂：当前小爱版本未启用自定义手机控制");
+            if (selection.route().equals("control") && !canControl()) {
+                report(context, "保留原厂：本机自定义屏幕控制未就绪");
                 return;
             }
             boolean thinking = (selection.route().equals("chat") || selection.route().equals("voice"))
@@ -468,7 +468,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     Profile controlProfile = profile(config, "control");
                     boolean auto = !route.equals("vision") && config.optBoolean("autoRoute", true);
                     boolean imageTool = auto && imageProfile.enabled();
-                    boolean controlTool = auto && adapter.phoneControl() && controlProfile.enabled();
+                    boolean controlTool = auto && controlProfile.enabled() && canControl();
                     boolean systemTools = (route.equals("chat") || route.equals("voice")) && config.optBoolean("systemTools", false);
                     DialogueProtocol.Tools tools = new DialogueProtocol.Tools(imageTool, controlTool, systemTools);
                     List<String> attachments = new ArrayList<>();
@@ -527,9 +527,14 @@ public final class HookEntry implements IXposedHookLoadPackage {
             return output;
         }
 
+        private boolean canControl() {
+            return adapter.phoneControl() && PhoneControl.available(context, loader, adapter.controlBackend());
+        }
+
         private String control(JSONObject config, Profile profile, String text, long request, ModelClient.Cancellation cancellation) throws Exception {
             if (!profile.enabled()) throw new IllegalArgumentException("控制通道未启用");
-            PhoneControl phone = new PhoneControl(context, loader, () -> current(request, config.optLong("revision")),
+            PhoneControl phone = new PhoneControl(context, loader, adapter.controlBackend(),
+                    () -> current(request, config.optLong("revision")),
                     value -> report(context, value), () -> {
                 if (generation.compareAndSet(request, request + 1)) report(context, "已停止自定义手机控制");
                 cancellation.cancel();

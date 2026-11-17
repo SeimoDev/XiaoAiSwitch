@@ -70,7 +70,8 @@ public class CompatibilityTest {
         AssistantVersion old = AssistantVersion.forCode(507011020);
         AssistantVersion current = AssistantVersion.forCode(508002070);
         check(old != null && old.phoneControl(), "legacy route removed");
-        check(current != null && !current.phoneControl(), "unverified control route enabled");
+        check(current != null && current.phoneControl() && current.controlBackend() != null, "8.2 native control backend is missing");
+        check(old.controlBackend() == null, "legacy control should keep its original backend");
         check(AssistantVersion.forCode(508002071) == null, "nearby unknown version enabled");
         ClassLoader loader = CompatibilityTest.class.getClassLoader();
         check(AssistantVersion.detectedStructure(loader, Event.class, Instruction.class, Handler.class)

@@ -4,7 +4,7 @@
 
 [![开源协议：GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?logo=gnu)](LICENSE)
 [![Android 构建状态](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml/badge.svg?branch=dev)](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml)
-[![源码版本：0.10.5](https://img.shields.io/badge/version-0.10.5-blue)](app/build.gradle)
+[![源码版本：0.10.6](https://img.shields.io/badge/version-0.10.6-blue)](app/build.gradle)
 [![Android API 27+](https://img.shields.io/badge/Android-API%2027%2B-3DDC84?logo=android&logoColor=white)](#兼容性)
 [![LSPosed 模块](https://img.shields.io/badge/LSPosed-Xposed%20API%2082-orange)](#兼容性)
 [![GitHub Stars](https://img.shields.io/github/stars/SeimoDev/XiaoAiSwitch?logo=github)](https://github.com/SeimoDev/XiaoAiSwitch/stargazers)
@@ -30,7 +30,7 @@
 | --- | --- |
 | 应用包名 | `io.github.xiaoaiswitch` |
 | 小爱作用域 | `com.miui.voiceassist` |
-| 已适配小爱版本 | `7.11.20.3514`（`507011020`）；`8.2.70.8421`（`508002070`，对话、语音、识图和绘图；手机控制走原厂） |
+| 已适配小爱版本 | `7.11.20.3514`（`507011020`）；`8.2.70.8421`（`508002070`，含双工语音和手机控制） |
 | Android SDK | `minSdk 27` · `targetSdk 35` · `compileSdk 36` |
 | 模块加载 | LSPosed，声明最低 Xposed API 82 |
 | 真机验证 | 小米平板 5（Android 16、LSPosed 2.2.1）；`2304FPN6DC`（[8.2 验证记录](analysis/voiceassist-8.2.md)） |
@@ -54,7 +54,7 @@
 | 识图 | 在首页进入「识图」，启用并选择支持图片输入的模型。之后在小爱的图片问答入口添加照片。未启用时保留原厂识图。 |
 | 默认通道 / 自动分流 | 在通用设置配置。自动分流没有固定调用上限；模型给出最终答复或任务取消时结束。也可用 `/chat 文本`、`/voice 文本`、`/draw 描述`、`/control 任务` 显式切换。 |
 | 系统工具 | 在「通用设置」单独开启。启用时自动在你的 System Prompt 后加入工具说明；时钟动作的实际状态以系统时钟为准。 |
-| 手机控制 | 模型需支持图像和工具调用；可在通用设置填写调用上限（正整数，默认 12 次），达到后自动停止。也可手动中止。 |
+| 手机控制 | 模型需支持图像和工具调用；手机需解锁，并通过原厂屏幕授权。可在通用设置填写调用上限（正整数，默认 12 次），达到后自动停止，也可手动中止。 |
 
 ## 从源码构建
 

@@ -138,7 +138,7 @@ class Handler(BaseHTTPRequestHandler):
             text = next((message["content"] for message in reversed(messages) if message.get("role") == "user"), "")
             if isinstance(text, list):
                 text = text[0]["text"]
-            control = "AUTOROUTE_CONTROL" in text
+            control = "AUTOROUTE_CONTROL" in text or text.startswith("CONTROL_GESTURE ")
             function = "control_phone" if control else "generate_image"
             if any(message.get("role") == "tool" and message.get("tool_call_id", "").startswith("AUTO_") for message in messages[user_index+1:]):
                 result = {"choices": [{"message": {"role": "assistant", "content": "AUTOROUTE_CONTROL_OK" if control else "AUTOROUTE_IMAGE_OK"}}]}

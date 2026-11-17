@@ -14,6 +14,7 @@ import android.util.Base64;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.InputDevice;
+import android.view.InputEvent;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -46,31 +47,54 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
     private final BooleanSupplier current;
     private final Consumer<String> report;
     private final Runnable stop;
+    private final NativePhoneAccess nativeAccess;
+    private final String windowUtilities;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final AtomicBoolean closed = new AtomicBoolean();
     private final List<SavedWindow> windows = new ArrayList<>();
     private Button button;
     private Object global;
     private StockControlEffect effect;
+    private Object board;
+    private View boardRoot;
     private int width;
     private int height;
 
-    PhoneControl(Context context, ClassLoader loader, BooleanSupplier current, Consumer<String> report, Runnable stop) {
+    PhoneControl(Context context, ClassLoader loader, AssistantVersion.ControlBackend mapping,
+                 BooleanSupplier current, Consumer<String> report, Runnable stop) {
         this.context = context;
         this.loader = loader;
         this.current = current;
         this.report = report;
         this.stop = stop;
+        nativeAccess = mapping == null ? null : new NativePhoneAccess(context, loader, mapping, this::check, report);
+        windowUtilities = mapping == null ? "com.xiaomi.voiceassistant.utils.k8" : mapping.window();
         width = context.getResources().getDisplayMetrics().widthPixels;
         height = context.getResources().getDisplayMetrics().heightPixels;
+    }
+
+    static boolean available(Context context, ClassLoader loader, AssistantVersion.ControlBackend mapping) {
+        return mapping == null || NativePhoneAccess.available(context, loader, mapping);
     }
 
     void begin() throws Exception {
         ui(() -> {
             check();
-            global = XposedHelpers.callStaticMethod(XposedHelpers.findClass("android.view.WindowManagerGlobal", loader), "getInstance");
-            hideWindows();
-            effect = new StockControlEffect(context, loader);
+            if (nativeAccess == null) {
+                global = XposedHelpers.callStaticMethod(XposedHelpers.findClass("android.view.WindowManagerGlobal", loader), "getInstance");
+                hideWindows();
+            } else {
+                Object manager = XposedHelpers.callStaticMethod(
+                        XposedHelpers.findClass("com.xiaomi.voiceassistant.UiManager", loader), "getInstance", context);
+                Object floatManager = XposedHelpers.callMethod(manager, "getFloatManager");
+                View root = (View) XposedHelpers.callMethod(floatManager, "getRootLayout");
+                if (root != null && root.isAttachedToWindow() && root.isShown()) {
+                    XposedHelpers.callMethod(floatManager, "setRootViewVisible", false, false);
+                    board = floatManager;
+                    boardRoot = root;
+                }
+            }
+            effect = new StockControlEffect(context, loader, windowUtilities);
             try {
                 effect.start();
             } catch (Throwable error) {
@@ -95,6 +119,8 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
             context.getSystemService(WindowManager.class).addView(button, params);
             return null;
         });
+        // OEM visibility changes are published on the next input-window transaction.
+        if (nativeAccess != null) pause(650);
     }
 
     void progress(int step) {
@@ -102,6 +128,7 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
     }
 
     void prepareResult() throws Exception {
+        if (nativeAccess != null) return;
         ui(() -> {
             Object manager = XposedHelpers.callStaticMethod(XposedHelpers.findClass("com.xiaomi.voiceassistant.UiManager", loader), "getInstance", context);
             XposedHelpers.callMethod(manager, "startIdleState", "xiaoai_switch_control");
@@ -112,9 +139,13 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
 
     @Override public String screenshot() throws Exception {
         check();
-        ui(() -> { hideWindows(); return null; });
-        Object capture = XposedHelpers.getStaticObjectField(XposedHelpers.findClass("c20.b", loader), "a");
-        Bitmap bitmap = (Bitmap) XposedHelpers.callMethod(capture, "takePlanBScreenShot");
+        if (nativeAccess == null) ui(() -> { hideWindows(); return null; });
+        Bitmap bitmap;
+        if (nativeAccess != null) bitmap = nativeAccess.capture();
+        else {
+            Object capture = XposedHelpers.getStaticObjectField(XposedHelpers.findClass("c20.b", loader), "a");
+            bitmap = (Bitmap) XposedHelpers.callMethod(capture, "takePlanBScreenShot");
+        }
         if (bitmap == null) throw new IllegalStateException("原厂截图接口未返回图像");
         width = bitmap.getWidth();
         height = bitmap.getHeight();
@@ -131,13 +162,15 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
 
     @Override public JSONObject execute(ControlProtocol.Action action) throws Exception {
         check();
-        ui(() -> { hideWindows(); return null; });
-        if (action instanceof ControlProtocol.Tap || action instanceof ControlProtocol.Swipe || action instanceof ControlProtocol.TypeText
+        if (nativeAccess == null) ui(() -> { hideWindows(); return null; });
+        if (nativeAccess != null) nativeAccess.requireAction();
+        else if (action instanceof ControlProtocol.Tap || action instanceof ControlProtocol.Swipe || action instanceof ControlProtocol.TypeText
                 || action instanceof ControlProtocol.PressKey key && key.key().equals("back")) ensureInputPermission();
         if (action instanceof ControlProtocol.OpenApp open) {
             Intent intent = context.getPackageManager().getLaunchIntentForPackage(open.packageName());
             if (intent == null) return new JSONObject().put("ok", false).put("error", "app_not_launchable");
             context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            if (nativeAccess != null) nativeAccess.opened(open.packageName());
         }
         if (action instanceof ControlProtocol.Tap tap) gesture(tap.x(), tap.y(), tap.x(), tap.y(), tap.duration(), false);
         if (action instanceof ControlProtocol.Swipe swipe) gesture(swipe.x(), swipe.y(), swipe.x2(), swipe.y2(), swipe.duration(), true);
@@ -160,7 +193,8 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
             if (manager == null || XposedHelpers.callMethod(manager, "getAIInputTextClient") == null) {
                 return new JSONObject().put("ok", false).put("error", "text_input_client_missing");
             }
-            XposedHelpers.callMethod(input(), "insertFocusText", text.text());
+            if (nativeAccess == null) XposedHelpers.callMethod(input(), "insertFocusText", text.text());
+            else nativeAccess.text(text.text());
         }
         pause(600);
         return new JSONObject().put("ok", true).put("status", "submitted_verify_screen").put("width", width).put("height", height);
@@ -168,10 +202,13 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
 
     private void gesture(double x, double y, double x2, double y2, int duration, boolean swipe) throws Exception {
         // The stop control must not consume a model-directed tap underneath it.
-        ui(() -> { if (button != null) button.setVisibility(View.GONE); return null; });
+        if (nativeAccess == null) ui(() -> { if (button != null) button.setVisibility(View.GONE); return null; });
         long down = SystemClock.uptimeMillis();
+        boolean sent = false;
+        boolean finished = false;
         try {
             motion(down, MotionEvent.ACTION_DOWN, x, y);
+            sent = true;
             if (swipe) {
                 int count = Math.max(1, duration / 16);
                 for (int index = 1; index <= count; index++) {
@@ -181,11 +218,18 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
                 }
             }
             if (!swipe) pause(duration);
-        } finally {
-            try {
+            if (nativeAccess != null) {
                 motion(down, MotionEvent.ACTION_UP, x2, y2);
-            } finally {
-                ui(() -> { if (!closed.get() && button != null) button.setVisibility(View.VISIBLE); return null; });
+                finished = true;
+            }
+        } finally {
+            if (nativeAccess != null && sent && !finished) motion(down, MotionEvent.ACTION_CANCEL, x2, y2);
+            if (nativeAccess == null) {
+                try {
+                    motion(down, MotionEvent.ACTION_UP, x2, y2);
+                } finally {
+                    ui(() -> { if (!closed.get() && button != null) button.setVisibility(View.VISIBLE); return null; });
+                }
             }
         }
     }
@@ -205,8 +249,12 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
 
     private Object input() { return XposedHelpers.getStaticObjectField(XposedHelpers.findClass("m20.g0", loader), "a"); }
 
-    private void inject(Object event) {
+    private void inject(InputEvent event) {
         try {
+            if (nativeAccess != null) {
+                nativeAccess.inject(event);
+                return;
+            }
             XposedHelpers.callMethod(event, "setDisplayId", 0);
             Object manager = XposedHelpers.callStaticMethod(XposedHelpers.findClass("android.hardware.input.InputManager", loader), "getInstance");
             // WAIT_FOR_FINISH reports actual dispatch; the native helper's ASYNC true only means queue admission.
@@ -290,6 +338,11 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
                     effect = null;
                 } finally {
                     if (button != null && button.isAttachedToWindow()) context.getSystemService(WindowManager.class).removeView(button);
+                    if (board != null && boardRoot.isAttachedToWindow()
+                            && XposedHelpers.callMethod(board, "getRootLayout") == boardRoot
+                            && boardRoot.getVisibility() == View.GONE) {
+                        XposedHelpers.callMethod(board, "setRootViewVisible", true, false);
+                    }
                     for (SavedWindow saved : windows) {
                         if (saved.view().isAttachedToWindow()) XposedHelpers.callMethod(global, "updateViewLayout", saved.view(), saved.params());
                     }

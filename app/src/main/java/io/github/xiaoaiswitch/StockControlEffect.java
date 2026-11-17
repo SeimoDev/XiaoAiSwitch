@@ -13,11 +13,13 @@ import de.robv.android.xposed.XposedHelpers;
 final class StockControlEffect implements AutoCloseable {
     private final Context context;
     private final ClassLoader loader;
+    private final String windowUtilities;
     private View view;
 
-    StockControlEffect(Context context, ClassLoader loader) {
+    StockControlEffect(Context context, ClassLoader loader, String windowUtilities) {
         this.context = context;
         this.loader = loader;
+        this.windowUtilities = windowUtilities;
     }
 
     void start() {
@@ -30,7 +32,7 @@ final class StockControlEffect implements AutoCloseable {
         XposedHelpers.callMethod(view, "setRepeatCount", -1);
         XposedHelpers.callMethod(view, "setScaleMode", 1);
         int type = (Integer) XposedHelpers.callStaticMethod(
-                XposedHelpers.findClass("com.xiaomi.voiceassistant.utils.k8", loader), "getWindowType");
+                XposedHelpers.findClass(windowUtilities, loader), "getWindowType");
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT, type,
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE

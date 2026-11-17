@@ -64,6 +64,13 @@ def main():
         state = ET.fromstring(adb("shell", "run-as", app, "cat", "shared_prefs/control_fixture.xml"))
         return {node.get("name"): node.get("value", node.text) for node in state}
 
+    def assert_gesture_delivered():
+        values = control_fixture()
+        directory.joinpath(args.name + "-fixture-state.json").write_text(json.dumps(values, ensure_ascii=False), encoding="utf-8")
+        assert values["count"] == "1", values
+        assert values["text"] == "控制测试XASWITCH", values
+        assert int(values["scroll"]) > 0, values
+
     records = Path(args.records)
     before = len(records.read_text(encoding="utf-8").splitlines()) if records.exists() else 0
     backup = root(f"if [ -f /data/user/0/{app}/shared_prefs/switch.xml ]; then cat /data/user/0/{app}/shared_prefs/switch.xml; else echo '<map />'; fi")
@@ -95,7 +102,8 @@ def main():
         adb("shell", "run-as", app, "cp", "/data/local/tmp/xa-current-prefs.xml", "shared_prefs/switch.xml")
         adb("reverse", "tcp:8765", "tcp:8765")
         adb("shell", "input", "keyevent", "224")
-        adb("shell", "wm", "dismiss-keyguard")
+        if not args.gesture:
+            adb("shell", "wm", "dismiss-keyguard")
         if args.microphone and not args.manual_microphone:
             adb("push", str(directory / "voice-fixture.wav"), "/data/local/tmp/xa-voice-fixture.wav")
             adb("shell", "run-as", app, "mkdir", "-p", "files")
@@ -105,12 +113,16 @@ def main():
             adb("shell", "am", "force-stop", "com.miui.voiceassist")
             adb("shell", "am", "start", "-W", "-n", app + "/.ControlFixtureActivity")
             deadline = time.monotonic() + 5
+            ready = False
             while time.monotonic() < deadline:
                 fixture = control_fixture()
                 if all(key in fixture for key in ("increment", "input", "scrollArea", "displayWidth", "displayHeight")):
-                    break
+                    windows = adb("shell", "dumpsys", "window", "displays").decode("utf-8")
+                    ready = any("mCurrentFocus=" in line and "ControlFixtureActivity" in line for line in windows.splitlines())
+                    if ready:
+                        break
                 time.sleep(.1)
-            assert "increment" in fixture, "Fixture did not report laid-out controls"
+            assert ready, "Unlock the phone and wait for the test page to receive input focus"
             width, height = int(fixture["displayWidth"]), int(fixture["displayHeight"])
 
             def bounds(description):
@@ -182,6 +194,10 @@ def main():
                 assert workers[0]["body"]["prompt"].startswith(config["image"]["systemPrompt"] + "\n\n")
             if args.delegate == "control":
                 assert workers[0]["body"]["messages"][0]["content"] == config["control"]["systemPrompt"]
+                if args.gesture:
+                    assert_gesture_delivered()
+                    print(json.dumps({"passed": True, "route": "control", "gesture": True, "automatic": True}))
+                    return
             time.sleep(1)
             tree = capture(args.name)
             assert any(node.get("text") == "AUTOROUTE_" + args.delegate.upper() + "_OK" for node in tree.iter("node")), "Delegation result missing from native UI"
@@ -282,11 +298,7 @@ def main():
                 assert len(results) == (6 if args.gesture else 3) and all(result.get("ok") for result in results), results
                 assert len({screen["sha256"] for screen in final["screens"]}) >= 2, "Screen state never changed"
                 if args.gesture:
-                    values = control_fixture()
-                    directory.joinpath(args.name + "-fixture-state.json").write_text(json.dumps(values, ensure_ascii=False), encoding="utf-8")
-                    assert values["count"] == "1", values
-                    assert values["text"] == "控制测试XASWITCH", values
-                    assert int(values["scroll"]) > 0, values
+                    assert_gesture_delivered()
                     print(json.dumps({"passed": True, "route": "control", "gesture": True}, ensure_ascii=False))
                     return
         time.sleep(1)
