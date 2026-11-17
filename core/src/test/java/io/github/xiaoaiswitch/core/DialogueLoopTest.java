@@ -62,6 +62,30 @@ public class DialogueLoopTest {
         }));
         assertEquals(1, calls.get());
     }
+
+    @Test public void phoneStepLimitEndsDelegationInsteadOfStartingAnotherControlTask() {
+        Profile profile = Profile.parse(new JSONObject().put("model", "PLANNER"));
+        JSONObject request = DialogueProtocol.request(profile, new JSONArray(), "打开设置", "", false, true);
+        JSONObject controlAnswer = new JSONObject("""
+                {"choices":[{"message":{"tool_calls":[
+                    {"id":"SCREEN","function":{"name":"screenshot","arguments":"{}"}}
+                ]}}]}
+                """);
+        AtomicInteger calls = new AtomicInteger();
+        ControlLoop.Environment phone = new ControlLoop.Environment() {
+            @Override public String screenshot() { return "screen"; }
+            @Override public JSONObject execute(ControlProtocol.Action action) { return new JSONObject().put("ok", true); }
+        };
+        assertThrows(ControlLoop.StepLimit.class, () -> DialogueLoop.run(profile, request, false, true, task -> {
+            ControlLoop.run(profile, task.text(), phone, 1, () -> true, new ModelClient.Cancellation(), ignored -> {},
+                    (active, input, cancel) -> controlAnswer);
+            return new DialogueLoop.Result("完成", List.of());
+        }, () -> true, new ModelClient.Cancellation(), (active, input, cancel) -> {
+            if (calls.incrementAndGet() > 1) throw new AssertionError("Retried after reaching the user step limit");
+            return DialogueProtocolTest.response("control_phone", new JSONObject().put("task", "打开设置"));
+        }));
+        assertEquals(1, calls.get());
+    }
     @Test public void actualHttpDelegationReturnsToolResultBeforeFinalAnswer() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         List<JSONObject> requests = new ArrayList<>();

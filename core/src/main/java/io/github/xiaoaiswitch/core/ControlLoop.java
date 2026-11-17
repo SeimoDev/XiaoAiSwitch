@@ -50,7 +50,9 @@ public final class ControlLoop {
                 messages.put(ControlProtocol.toolResult(action.id(), result));
             }
             check(current, cancellation);
-            messages.put(ControlProtocol.visualMessage("执行后的当前屏幕。请依据实际状态判断下一步，完成后用文字回答。", environment.screenshot()));
+            if (step + 1 < limit) {
+                messages.put(ControlProtocol.visualMessage("执行后的当前屏幕。请依据实际状态判断下一步，完成后用文字回答。", environment.screenshot()));
+            }
         }
         throw new StepLimit(limit);
     }

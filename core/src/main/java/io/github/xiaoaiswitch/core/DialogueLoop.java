@@ -36,7 +36,7 @@ public final class DialogueLoop {
                     Result value = environment.execute(task);
                     output.addAll(value.images());
                     result = new JSONObject().put("ok", true).put("message", value.text()).put("image_count", value.images().size());
-                } catch (CancellationException | SecurityException error) {
+                } catch (CancellationException | SecurityException | ControlLoop.StepLimit error) {
                     throw error;
                 } catch (Exception error) {
                     result = new JSONObject().put("ok", false).put("error", error.getClass().getSimpleName());
