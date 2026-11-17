@@ -1,6 +1,11 @@
 name: Star history
 
 on:
+  push:
+    branches: [dev]
+    paths:
+      - .github/workflows/star-history.yml
+      - scripts/update_star_history.py
   schedule:
     - cron: '41 2 * * *'
   workflow_dispatch:
