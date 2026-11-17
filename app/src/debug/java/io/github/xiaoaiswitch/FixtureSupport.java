@@ -23,6 +23,16 @@ final class FixtureSupport {
                 if (nonce.isEmpty() || !nonce.equals(intent.getStringExtra("nonce"))) return;
                 param.setResult(2);
                 String mode = intent.getStringExtra("mode");
+                if ("reopen_control_board".equals(mode)) {
+                    Object manager = XposedHelpers.callStaticMethod(XposedHelpers.findClass(
+                            "com.xiaomi.voiceassistant.UiManager", loader), "getInstance", context);
+                    Object board = XposedHelpers.callMethod(manager, "getFloatManager");
+                    XposedHelpers.callMethod(board, "setRootViewVisible", true, false);
+                    if (XposedHelpers.callMethod(board, "getRootLayout") instanceof android.view.View root && root.isShown()) {
+                        HookEntry.report(context, "CONTROL_FIXTURE_BOARD_REOPENED");
+                    }
+                    return;
+                }
                 if ("clear".equals(mode)) {
                     Object speech = XposedHelpers.callStaticMethod(XposedHelpers.findClass(adapter.engine().session(), loader), "getInstance");
                     XposedHelpers.callMethod(speech, "clearSession");

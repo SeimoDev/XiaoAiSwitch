@@ -43,6 +43,9 @@ import org.json.JSONObject;
 /** Uses the assistant's already-granted input/capture capabilities, not a shell command channel. */
 final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
     private record SavedWindow(View view, WindowManager.LayoutParams params) {}
+    private record BoardInput(View view, int originalFlags) {}
+    private static final int BLOCK_BOARD_INPUT = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
 
     private final Context context;
     private final ClassLoader loader;
@@ -54,6 +57,7 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final AtomicBoolean closed = new AtomicBoolean();
     private final List<SavedWindow> windows = new ArrayList<>();
+    private final List<BoardInput> boardInputs = new ArrayList<>();
     private Button button;
     private Object global;
     private StockControlEffect effect;
@@ -100,13 +104,7 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
                     }
                     fullScreenMoved = true;
                 }
-                Object floatManager = XposedHelpers.callMethod(manager, "getFloatManager");
-                View root = (View) XposedHelpers.callMethod(floatManager, "getRootLayout");
-                if (root != null && root.isAttachedToWindow() && root.isShown()) {
-                    XposedHelpers.callMethod(floatManager, "setRootViewVisible", false, false);
-                    board = floatManager;
-                    boardRoot = root;
-                }
+                suspendBoard(manager);
             }
             effect = new StockControlEffect(context, loader, windowUtilities);
             try {
@@ -137,6 +135,44 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
         if (nativeAccess != null) pause(650);
     }
 
+    private boolean suspendBoard(Object manager) {
+        Object floatManager = XposedHelpers.callMethod(manager, "getFloatManager");
+        View root = (View) XposedHelpers.callMethod(floatManager, "getRootLayout");
+        if (root == null || !root.isAttachedToWindow()) return false;
+        boolean shown = root.isShown();
+        if (shown) {
+            XposedHelpers.callMethod(floatManager, "setRootViewVisible", false, false);
+            board = floatManager;
+            boardRoot = root;
+        }
+        // A new or reconfigured assistant root can keep an input window even after the view is hidden.
+        if (!(root.getLayoutParams() instanceof WindowManager.LayoutParams params)
+                || !"voice_assist_root".contentEquals(params.getTitle())
+                || (params.flags & BLOCK_BOARD_INPUT) == BLOCK_BOARD_INPUT) return shown;
+        if (boardInputs.stream().noneMatch(saved -> saved.view() == root)) {
+            boardInputs.add(new BoardInput(root, params.flags & BLOCK_BOARD_INPUT));
+        }
+        updateBoardInput(root, params, BLOCK_BOARD_INPUT);
+        return true;
+    }
+
+    private void settleBoard() throws Exception {
+        boolean changed = ui(() -> {
+            check();
+            Object manager = XposedHelpers.callStaticMethod(
+                    XposedHelpers.findClass("com.xiaomi.voiceassistant.UiManager", loader), "getInstance", context);
+            return suspendBoard(manager);
+        });
+        if (changed) pause(120);
+    }
+
+    private void updateBoardInput(View root, WindowManager.LayoutParams params, int flags) {
+        WindowManager.LayoutParams copy = new WindowManager.LayoutParams();
+        copy.copyFrom(params);
+        copy.flags = (copy.flags & ~BLOCK_BOARD_INPUT) | flags;
+        context.getSystemService(WindowManager.class).updateViewLayout(root, copy);
+    }
+
     void progress(int step) {
         main.post(() -> { if (!closed.get() && button != null) button.setText("停止控制 · " + step); });
     }
@@ -155,7 +191,11 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
         check();
         if (nativeAccess == null) ui(() -> { hideWindows(); return null; });
         Bitmap bitmap;
-        if (nativeAccess != null) bitmap = nativeAccess.capture();
+        if (nativeAccess != null) {
+            settleBoard();
+            bitmap = nativeAccess.capture();
+            if (bitmap == null) return "";
+        }
         else {
             Object capture = XposedHelpers.getStaticObjectField(XposedHelpers.findClass("c20.b", loader), "a");
             bitmap = (Bitmap) XposedHelpers.callMethod(capture, "takePlanBScreenShot");
@@ -177,7 +217,11 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
     @Override public JSONObject execute(ControlProtocol.Action action) throws Exception {
         check();
         if (nativeAccess == null) ui(() -> { hideWindows(); return null; });
-        if (nativeAccess != null) nativeAccess.requireAction();
+        if (nativeAccess != null) {
+            settleBoard();
+            if (action instanceof ControlProtocol.OpenApp) nativeAccess.requireLaunch();
+            else nativeAccess.requireAction();
+        }
         else if (action instanceof ControlProtocol.Tap || action instanceof ControlProtocol.Swipe || action instanceof ControlProtocol.TypeText
                 || action instanceof ControlProtocol.PressKey key && key.key().equals("back")) ensureInputPermission();
         if (action instanceof ControlProtocol.OpenApp open) {
@@ -185,6 +229,9 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
             if (intent == null) return new JSONObject().put("ok", false).put("error", "app_not_launchable");
             context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             if (nativeAccess != null) nativeAccess.opened(open.packageName());
+        } else if (nativeAccess != null) {
+            // The original permission sheet can resume the assistant window when it closes.
+            settleBoard();
         }
         if (action instanceof ControlProtocol.Tap tap) gesture(tap.x(), tap.y(), tap.x(), tap.y(), tap.duration(), false);
         if (action instanceof ControlProtocol.Swipe swipe) gesture(swipe.x(), swipe.y(), swipe.x2(), swipe.y2(), swipe.duration(), true);
@@ -358,6 +405,13 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
                     effect = null;
                 } finally {
                     if (button != null && button.isAttachedToWindow()) context.getSystemService(WindowManager.class).removeView(button);
+                    for (BoardInput saved : boardInputs) {
+                        if (saved.view().isAttachedToWindow() && saved.view().getLayoutParams() instanceof WindowManager.LayoutParams params
+                                && (params.flags & BLOCK_BOARD_INPUT) == BLOCK_BOARD_INPUT) {
+                            updateBoardInput(saved.view(), params, saved.originalFlags());
+                        }
+                    }
+                    boardInputs.clear();
                     if (board != null && boardRoot.isAttachedToWindow()
                             && XposedHelpers.callMethod(board, "getRootLayout") == boardRoot
                             && boardRoot.getVisibility() == View.GONE) {

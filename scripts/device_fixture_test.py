@@ -5,6 +5,7 @@ import re
 import shlex
 import subprocess
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from fixture_config import with_registry
@@ -26,6 +27,8 @@ def main():
     parser.add_argument("--cancel", action="store_true")
     parser.add_argument("--gesture", action="store_true")
     parser.add_argument("--full-screen", action="store_true", help="Start the original full-screen XiaoAi before the control fixture request.")
+    parser.add_argument("--reopen-board", action="store_true", help="Reopen the original assistant board while the first model call is paused.")
+    parser.add_argument("--control-launch", action="store_true", help="Open Clock and require a new frame before any further input.")
     parser.add_argument("--microphone", action="store_true")
     parser.add_argument("--manual-microphone", action="store_true")
     parser.add_argument("--steps", type=int)
@@ -36,6 +39,8 @@ def main():
     args = parser.parse_args()
     if args.full_screen and not args.gesture:
         parser.error("--full-screen requires --gesture")
+    if (args.reopen_board or args.control_launch) and (not args.gesture or args.route != "control" or args.cancel or args.delegate):
+        parser.error("control fixtures require --route control --gesture and no delegation or cancellation")
     if args.system and (args.route != "chat" or args.delegate or args.microphone or args.default_route not in (None, "chat")):
         parser.error("--system requires a standalone chat request")
     if args.manual_microphone:
@@ -82,6 +87,8 @@ def main():
                            "model": "FIXTURE_" + args.route.upper(), "systemPrompt": "FIXTURE_" + args.route.upper() + "_PROMPT"}}
     if args.steps is not None:
         config["controlSteps"] = args.steps
+    if args.reopen_board:
+        config["fixtureNonce"] = uuid.uuid4().hex
     if args.system:
         config.update(systemTools=True, autoRoute=False)
         config["chat"]["model"] = "FIXTURE_SYSTEM"
@@ -131,14 +138,17 @@ def main():
             def bounds(description):
                 return [int(value) for value in fixture[description].split(",")]
 
-            if not args.cancel:
+            if args.control_launch:
+                args.query = "CONTROL_LAUNCH_FIXTURE"
+            elif not args.cancel:
                 tap = bounds("increment")
                 field = bounds("input")
                 scroll = bounds("scrollArea")
                 args.query = "CONTROL_GESTURE " + json.dumps({"tap": [(tap[0] + tap[2]) / 2 / width, (tap[1] + tap[3]) / 2 / height],
                     "input": [(field[0] + field[2]) / 2 / width, (field[1] + field[3]) / 2 / height],
                     "swipe": [(scroll[0] + scroll[2]) / 2 / width, (scroll[1] + (scroll[3] - scroll[1]) * .85) / height,
-                              (scroll[0] + scroll[2]) / 2 / width, (scroll[1] + (scroll[3] - scroll[1]) * .25) / height]})
+                              (scroll[0] + scroll[2]) / 2 / width, (scroll[1] + (scroll[3] - scroll[1]) * .25) / height],
+                    "reopen_board": args.reopen_board})
         if args.full_screen:
             adb("shell", "am", "start", "-W", "-n", "com.miui.voiceassist/com.xiaomi.voiceassistant.MainActivity")
             deadline = time.monotonic() + 6
@@ -168,6 +178,34 @@ def main():
         request = json.loads(observed[before])
         assert request["fixture_token_matches"], "Authorization did not reach fixture"
         assert request["body"]["model"] == config[args.route]["model"]
+        if args.reopen_board:
+            root("am startservice -n com.miui.voiceassist/com.xiaomi.voiceassistant.SpeechQueryService "
+                 "-a io.github.xiaoaiswitch.FIXTURE --es mode reopen_control_board --es nonce " + config["fixtureNonce"])
+            until = time.monotonic() + 2
+            while time.monotonic() < until:
+                state = ET.fromstring(adb("shell", "run-as", app, "cat", "shared_prefs/switch.xml"))
+                if any(node.get("name") == "status" and node.text == "CONTROL_FIXTURE_BOARD_REOPENED" for node in state):
+                    break
+                time.sleep(.1)
+            else:
+                raise AssertionError("The original board did not reopen during the model request")
+        if args.control_launch:
+            until = time.monotonic() + 15
+            while time.monotonic() < until:
+                entries = records.read_text(encoding="utf-8").splitlines()
+                if len(entries) >= before + 2:
+                    break
+                time.sleep(.2)
+            assert len(entries) >= before + 2, "Launch did not yield a follow-up"
+            followup = json.loads(entries[before + 1])
+            result = {msg["tool_call_id"]: json.loads(msg["content"]) for msg in followup["body"]["messages"] if msg.get("role") == "tool"}
+            assert result["LAUNCH"]["ok"] and result["STALE_TAP"]["error"] == "screen_refresh_required", result
+            assert len({screen["sha256"] for screen in followup["screens"]}) >= 2, "Launch did not get a fresh frame"
+            assert control_fixture()["count"] == "0"
+            assert any("topResumedActivity" in line and "com.android.deskclock/" in line
+                       for line in adb("shell", "dumpsys", "activity", "activities").decode("utf8").splitlines()), "Clock never reached the foreground"
+            print(json.dumps({"passed": True, "opened_clock": True, "discarded_stale_tap": True}))
+            return
         if args.system:
             assert {tool["function"]["name"] for tool in request["body"]["tools"]} == {"launch_app", "set_alarm", "start_timer"}
             prompt = request["body"]["messages"][0]["content"]

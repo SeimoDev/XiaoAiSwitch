@@ -80,10 +80,21 @@ final class NativePhoneAccess {
     Bitmap capture() throws Exception {
         Target next = foreground();
         if (launched != null) {
-            if (!next.pkg().equals(launched)) throw new SecurityException("启动目标未进入前台");
+            long until = SystemClock.uptimeMillis() + 5000;
+            while (!next.pkg().equals(launched)) {
+                if (SystemClock.uptimeMillis() >= until) {
+                    throw new SecurityException("已请求打开目标应用，但它没有在 5 秒内进入前台");
+                }
+                Thread.sleep(100);
+                next = foreground();
+            }
             launched = null;
         } else if (snapshot != null && !snapshot.equals(next)) {
             throw new SecurityException("授权的前台窗口或显示尺寸已变化");
+        }
+        if (!permitted(next)) {
+            if (snapshot == null) return null;
+            throw new SecurityException("当前属于受保护的系统窗口，未读取或操作");
         }
         authorize(next);
         Bitmap bitmap = (Bitmap) XposedHelpers.callMethod(singleton(mapping.capture()), "takeScreenshotAndExcludeSelf",
@@ -106,7 +117,15 @@ final class NativePhoneAccess {
         authorize(snapshot);
     }
 
-    void opened(String pkg) { launched = pkg; }
+    void requireLaunch() {
+        Target current = foreground();
+        if (snapshot != null && !snapshot.equals(current)) throw new SecurityException("启动前前台窗口已变化，请重新发起");
+    }
+
+    void opened(String pkg) {
+        snapshot = null;
+        launched = pkg;
+    }
 
     void inject(InputEvent event) {
         if (!(event instanceof MotionEvent motion) || motion.getActionMasked() != MotionEvent.ACTION_CANCEL) check.run();
@@ -118,10 +137,10 @@ final class NativePhoneAccess {
             InputManager manager = context.getSystemService(InputManager.class);
             if (manager == null || !Boolean.TRUE.equals(XposedHelpers.callMethod(manager, "injectInputEvent",
                     event, 2, snapshot.uid()))) { // WAIT_FOR_FINISH: requires the exact target UID.
-                throw new SecurityException("系统未向当前授权窗口交付输入");
+                throw new SecurityException("触点没有命中正在授权操作的应用，已停止本次操作");
             }
         } catch (XposedHelpers.InvocationTargetError | LinkageError error) {
-            throw new SecurityException("系统未向当前授权窗口交付输入", error);
+            throw new SecurityException("系统拒绝了这次输入，已停止本次操作", error);
         }
     }
 
@@ -138,10 +157,6 @@ final class NativePhoneAccess {
             }
             String pkg = info.topActivity.getPackageName();
             int uid = context.getPackageManager().getPackageUid(pkg, 0);
-            if (pkg.equals(context.getPackageName()) || pkg.equals("com.miui.securitycenter")
-                    || pkg.equals("com.android.systemui") || uid < android.os.Process.FIRST_APPLICATION_UID) {
-                throw new SecurityException("系统窗口不接受自定义控制");
-            }
             Display display = display();
             DisplayMetrics metrics = new DisplayMetrics();
             display.getRealMetrics(metrics);
@@ -150,6 +165,11 @@ final class NativePhoneAccess {
         } catch (PackageManager.NameNotFoundException | XposedHelpers.InvocationTargetError | XposedHelpers.ClassNotFoundError | LinkageError error) {
             throw new SecurityException("系统未返回默认屏幕前台", error);
         }
+    }
+
+    private boolean permitted(Target target) {
+        return target.uid() >= android.os.Process.FIRST_APPLICATION_UID && !target.pkg().equals(context.getPackageName())
+                && !target.pkg().equals("com.miui.securitycenter") && !target.pkg().equals("com.android.systemui");
     }
 
     private Display display() {

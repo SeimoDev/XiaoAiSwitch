@@ -28,17 +28,24 @@ public final class ControlLoop {
                              ModelClient.Cancellation cancellation, IntConsumer progress, ModelClient.Transport transport) throws Exception {
         if (limit < 1) throw new IllegalArgumentException("控制调用上限需为正整数");
         check(current, cancellation);
-        JSONArray messages = ControlProtocol.initialMessages(profile, text, environment.screenshot());
+        String screen = environment.screenshot();
+        JSONArray messages = ControlProtocol.initialMessages(profile, text, screen);
         for (int step = 0; step < limit; step++) {
             check(current, cancellation);
             progress.accept(step + 1);
-            JSONObject response = transport.chat(profile, ControlProtocol.request(profile, messages), cancellation);
+            JSONObject response = transport.chat(profile, ControlProtocol.request(profile, messages, !screen.isEmpty()), cancellation);
             check(current, cancellation);
             List<ControlProtocol.Action> actions = ControlProtocol.actions(response);
             if (actions.isEmpty()) return ChatProtocol.answer(response);
             messages.put(response.getJSONArray("choices").getJSONObject(0).getJSONObject("message").put("role", "assistant"));
+            boolean refreshRequired = false;
             for (ControlProtocol.Action action : actions) {
                 check(current, cancellation);
+                if (refreshRequired || (screen.isEmpty() && !(action instanceof ControlProtocol.OpenApp))) {
+                    String error = refreshRequired ? "screen_refresh_required" : "no_authorized_screen";
+                    messages.put(ControlProtocol.toolResult(action.id(), new JSONObject().put("ok", false).put("error", error)));
+                    continue;
+                }
                 JSONObject result;
                 try {
                     result = environment.execute(action);
@@ -47,11 +54,14 @@ public final class ControlLoop {
                 } catch (Exception error) {
                     result = new JSONObject().put("ok", false).put("error", error.getClass().getSimpleName());
                 }
+                refreshRequired = action instanceof ControlProtocol.OpenApp;
                 messages.put(ControlProtocol.toolResult(action.id(), result));
             }
             check(current, cancellation);
             if (step + 1 < limit) {
-                messages.put(ControlProtocol.visualMessage("执行后的当前屏幕。请依据实际状态判断下一步，完成后用文字回答。", environment.screenshot()));
+                screen = environment.screenshot();
+                if (screen.isEmpty()) messages.put(ChatProtocol.message("user", "当前没有可用于操作的授权画面。"));
+                else messages.put(ControlProtocol.visualMessage("执行后的当前屏幕。请依据实际状态判断下一步，完成后用文字回答。", screen));
             }
         }
         throw new StepLimit(limit);

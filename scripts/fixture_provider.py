@@ -90,6 +90,7 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(raw)
         recorded_body = json.loads(json.dumps(body))
         screens = []
+        launch_probe = any("CONTROL_LAUNCH_FIXTURE" in str(message.get("content", "")) for message in body.get("messages", []))
         phone_tools = any(tool.get("function", {}).get("name") == "open_app" for tool in body.get("tools", []))
         delegate_tools = any(tool.get("function", {}).get("name") == "generate_image" or tool.get("function", {}).get("name") == "control_phone" for tool in body.get("tools", []))
         if phone_tools or delegate_tools or body.get("model") == "FIXTURE_VISION":
@@ -104,7 +105,7 @@ class Handler(BaseHTTPRequestHandler):
                     digest = hashlib.sha256(content).hexdigest()
                     image = Image.open(io.BytesIO(content))
                     screens.append({"sha256": digest, "bytes": len(content), "width": image.width, "height": image.height})
-                    if phone_tools or delegate_tools:
+                    if (phone_tools or delegate_tools) and not launch_probe:
                         self.server.records.parent.joinpath("control-screen-" + digest[:16] + ".jpg").write_bytes(content)
                     part["image_url"]["url"] = "<redacted screenshot sha256=" + digest + ">"
         token = "FIXTURE_TOKEN"
@@ -157,13 +158,22 @@ class Handler(BaseHTTPRequestHandler):
                          if message.get("role") == "user" and isinstance(message.get("content"), list)), "")
             if goal.startswith("CONTROL_GESTURE "):
                 points = json.loads(goal.split(" ", 1)[1])
+                if calls == 0 and points.get("reopen_board"):
+                    time.sleep(3)
                 action = [("tap", {"x": points["tap"][0], "y": points["tap"][1]}),
                           ("tap", {"x": points["input"][0], "y": points["input"][1]}),
                           ("type_text", {"text": "控制测试XASWITCH"}), ("press_key", {"key": "back"}),
                           ("swipe", {"x": points["swipe"][0], "y": points["swipe"][1],
                                      "x2": points["swipe"][2], "y2": points["swipe"][3], "duration_ms": 400}),
                           ("screenshot", {})]
-            if calls < len(action):
+            if launch_probe and calls == 0:
+                result = {"choices": [{"message": {"role": "assistant", "tool_calls": [
+                    {"id": "LAUNCH", "type": "function", "function": {"name": "open_app", "arguments": '{"package":"com.android.deskclock"}'}},
+                    {"id": "STALE_TAP", "type": "function", "function": {"name": "tap", "arguments": '{"x":0.5,"y":0.12}'}}
+                ]}}]}
+            elif launch_probe:
+                result = {"choices": [{"message": {"role": "assistant", "content": "CONTROL_LAUNCH_OK"}}]}
+            elif calls < len(action):
                 name, arguments = action[calls]
                 result = {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [
                     {"id": "CONTROL_" + str(calls), "type": "function", "function": {

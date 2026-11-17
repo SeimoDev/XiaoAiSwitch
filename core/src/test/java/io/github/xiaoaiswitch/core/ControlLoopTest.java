@@ -16,6 +16,43 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class ControlLoopTest {
+    @Test public void protectedInitialScreenAndAppLaunchNeverUseOldCoordinates() throws Exception {
+        assertLaunchRefreshesFrame(true);
+        assertLaunchRefreshesFrame(false);
+    }
+
+    private void assertLaunchRefreshesFrame(boolean opened) throws Exception {
+        AtomicInteger screenshots = new AtomicInteger();
+        AtomicInteger calls = new AtomicInteger();
+        List<ControlProtocol.Action> executed = new ArrayList<>();
+        ControlLoop.Environment environment = new ControlLoop.Environment() {
+            @Override public String screenshot() { return screenshots.incrementAndGet() == 1 ? "" : "NEW_SCREEN"; }
+            @Override public JSONObject execute(ControlProtocol.Action action) {
+                executed.add(action);
+                return new JSONObject().put("ok", opened);
+            }
+        };
+        JSONObject openAndTap = DialogueProtocolTest.response("open_app", new JSONObject().put("package", "io.github.xiaoaiswitch"));
+        JSONArray tools = openAndTap.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getJSONArray("tool_calls");
+        tools.getJSONObject(0).put("id", "OPEN");
+        tools.put(new JSONObject().put("id", "OLD").put("function", new JSONObject().put("name", "tap")
+                .put("arguments", new JSONObject().put("x", 0.5).put("y", 0.5).toString())));
+        assertEquals("完成", ControlLoop.run(Profile.parse(new JSONObject()), "task", environment,
+                3, () -> true, new ModelClient.Cancellation(), ignored -> {}, (profile, input, cancel) -> {
+                    if (calls.getAndIncrement() == 0) {
+                        assertEquals(1, input.getJSONArray("tools").length());
+                        assertEquals("open_app", input.getJSONArray("tools").getJSONObject(0).getJSONObject("function").getString("name"));
+                        return openAndTap;
+                    }
+                    JSONArray history = input.getJSONArray("messages");
+                    JSONObject skipped = new JSONObject(history.getJSONObject(3).getString("content"));
+                    assertEquals("screen_refresh_required", skipped.getString("error"));
+                    assertEquals("NEW_SCREEN", history.getJSONObject(4).getJSONArray("content").getJSONObject(1)
+                            .getJSONObject("image_url").getString("url"));
+                    return new JSONObject("{\"choices\":[{\"message\":{\"content\":\"完成\"}}]}");
+                }));
+        assertEquals(List.of(new ControlProtocol.OpenApp("OPEN", "io.github.xiaoaiswitch")), executed);
+    }
     @Test public void actualHttpLoopCarriesToolResultAndUpdatedScreen() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         List<JSONObject> requests = new ArrayList<>();

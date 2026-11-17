@@ -25,11 +25,16 @@ public final class ControlProtocol {
     }
 
     public static JSONObject request(Profile profile, JSONArray messages) {
+        return request(profile, messages, true);
+    }
+
+    static JSONObject request(Profile profile, JSONArray messages, boolean hasScreen) {
         JSONObject point = new JSONObject().put("type", "number").put("minimum", 0).put("maximum", 1);
         JSONObject duration = new JSONObject().put("type", "integer").put("minimum", 1).put("maximum", 5000);
-        JSONArray tools = new JSONArray()
-                .put(function("open_app", "打开指定 Android 包名的应用。", new JSONObject()
-                        .put("package", new JSONObject().put("type", "string")), "package"))
+        JSONArray tools = new JSONArray().put(function("open_app",
+                "打开用户指定的应用。启动后使用下一轮的新截图，再决定点击或输入。", new JSONObject()
+                        .put("package", new JSONObject().put("type", "string")), "package"));
+        if (hasScreen) tools
                 .put(function("tap", "点击当前屏幕坐标；x、y 为从左上角起的 0 到 1 比例。duration_ms 可用于长按。", new JSONObject()
                         .put("x", point).put("y", point).put("duration_ms", duration), "x", "y"))
                 .put(function("swipe", "在当前屏幕滑动，起点终点均为 0 到 1 比例坐标。", new JSONObject()
