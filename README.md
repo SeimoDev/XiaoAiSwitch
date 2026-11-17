@@ -4,7 +4,7 @@
 
 [![开源协议：GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?logo=gnu)](LICENSE)
 [![Android 构建状态](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml/badge.svg?branch=dev)](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml)
-[![源码版本：0.10.4](https://img.shields.io/badge/version-0.10.4-blue)](app/build.gradle)
+[![源码版本：0.10.5](https://img.shields.io/badge/version-0.10.5-blue)](app/build.gradle)
 [![Android API 27+](https://img.shields.io/badge/Android-API%2027%2B-3DDC84?logo=android&logoColor=white)](#兼容性)
 [![LSPosed 模块](https://img.shields.io/badge/LSPosed-Xposed%20API%2082-orange)](#兼容性)
 [![GitHub Stars](https://img.shields.io/github/stars/SeimoDev/XiaoAiSwitch?logo=github)](https://github.com/SeimoDev/XiaoAiSwitch/stargazers)
@@ -18,7 +18,7 @@
 ## 功能
 
 - **模型管理**：兼容 OpenAI API，也支持在手机独立登录并直连 Codex 订阅。文本和语音的默认／思考模式可分别选模型和提示词。
-- **文本与语音**：文本回答使用原生 Markdown 排版；语音保留小爱的语音识别和 TTS。
+- **文本与语音**：文本回答使用原生 Markdown 排版；语音保留小爱的语音识别和 TTS，包括已验证的 8.2 双工语音入口。
 - **识图**：可为小爱的图片问答单独选择支持图片输入的模型。绘图和图生图仍使用「绘图」配置。
 - **绘图**：支持文生图、原图编辑和放大预览。可用独立图片 API，或直接使用 Codex 订阅绘图。
 - **手机控制**：支持截图、点击、滑动和输入；沿用原厂 AI 智控权限和全局光效，可随时停止。

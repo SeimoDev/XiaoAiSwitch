@@ -26,6 +26,7 @@ import io.github.xiaoaiswitch.core.QueryRouter;
 import io.github.xiaoaiswitch.core.ControlLoop;
 import io.github.xiaoaiswitch.core.DialogueProtocol;
 import io.github.xiaoaiswitch.core.DialogueLoop;
+import io.github.xiaoaiswitch.core.DuplexTurns;
 import io.github.xiaoaiswitch.core.CodexClient;
 import io.github.xiaoaiswitch.core.CodexOAuth;
 import io.github.xiaoaiswitch.core.ModeProfiles;
@@ -95,6 +96,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
         private final Map<String, JSONArray> histories = new LinkedHashMap<>();
         private final Map<String, PendingVoice> voiceInputs = Collections.synchronizedMap(new LinkedHashMap<>());
         private final ImageBridge images;
+        private volatile DuplexVoice duplexVoice;
         private volatile String previousImage = "";
         private long revision;
 
@@ -134,6 +136,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
             XposedHelpers.findAndHookMethod(engine.session(), loader, "clearSession", new XC_MethodHook() {
                 @Override protected void afterHookedMethod(MethodHookParam param) {
                     if (activeControl.get() == null) {
+                        duplexVoice = null;
                         generation.incrementAndGet();
                         cancelPending();
                         previousImage = "";
@@ -246,12 +249,22 @@ public final class HookEntry implements IXposedHookLoadPackage {
         private void outbound(XC_MethodHook.MethodHookParam param) throws Exception {
             Object event = param.args[0];
             String name = (String) XposedHelpers.callMethod(event, "getFullName");
+            if (name.equals("SpeechRecognizer.DuplexRecognizeFinished")) {
+                DuplexVoice duplex = duplexVoice;
+                if (duplex != null && duplex.engine() == param.thisObject) {
+                    duplex.turns().close((String) XposedHelpers.callMethod(event, "getId"));
+                }
+                return;
+            }
+            boolean duplexStart = name.equals("SpeechRecognizer.DuplexRecognizeStarted") && adapter.duplexState() != null;
+            boolean voiceStart = duplexStart || name.equals("SpeechRecognizer.Recognize");
             boolean nativeVision = name.equals("MultiModal.ImageUnderstand");
             if (!name.equals("Nlp.Request") && !name.equals("Nlp.RequestLargeLanguageModelContent")
-                    && !name.equals("SpeechRecognizer.Recognize") && !name.equals("MultiModal.ImageGeneration") && !nativeVision) return;
+                    && !voiceStart && !name.equals("MultiModal.ImageGeneration") && !nativeVision) return;
             if (nativeVision && !images.isAttachmentQuery(event)) return;
             JSONObject config = config();
             if (!config.optBoolean("enabled", false)) {
+                duplexVoice = null;
                 generation.incrementAndGet();
                 cancelPending();
                 owned.clear();
@@ -267,22 +280,31 @@ public final class HookEntry implements IXposedHookLoadPackage {
             }
             boolean nativeDrawing = !nativeVision && input.drawing();
             boolean useVision = (nativeVision || (!input.ids().isEmpty() && !nativeDrawing)) && visionEnabled;
-            if (name.equals("SpeechRecognizer.Recognize")) {
+            if (voiceStart) {
+                duplexVoice = null;
                 String route = useVision ? "vision" : "voice";
                 boolean thinking = !useVision && ThinkingMode.isThinking(event, loader, adapter.dialogContext());
                 if (!ModeProfiles.resolve(config, route, thinking).enabled()) {
                     report(context, "保留原厂：语音通道未开启自定义模型");
                     return;
                 }
+                String firstRound = duplexStart ? (String) optionalValue(XposedHelpers.callMethod(
+                        XposedHelpers.callMethod(event, "getPayload"), "getFirstRoundRid")) : null;
                 onlyAsr(event);
                 generation.incrementAndGet();
                 cancelPending();
-                own(dialog, "voice-pending");
-                voiceInputs.put(dialog, new PendingVoice(input, thinking, route));
-                synchronized (voiceInputs) {
-                    while (voiceInputs.size() > 64) voiceInputs.remove(voiceInputs.keySet().iterator().next());
+                PendingVoice pending = new PendingVoice(input, thinking, route);
+                if (duplexStart) {
+                    duplexVoice = new DuplexVoice(param.thisObject, new DuplexTurns(dialog, firstRound), pending);
+                } else {
+                    own(dialog, "voice-pending");
+                    voiceInputs.put(dialog, pending);
+                    synchronized (voiceInputs) {
+                        while (voiceInputs.size() > 64) voiceInputs.remove(voiceInputs.keySet().iterator().next());
+                    }
                 }
                 context.getContentResolver().call(ConfigProvider.URI, "asr", null, null);
+                if (duplexStart) report(context, "双工语音识别中");
                 return;
             }
             String text = images.query(event);
@@ -323,9 +345,10 @@ public final class HookEntry implements IXposedHookLoadPackage {
         private void inbound(XC_MethodHook.MethodHookParam param) throws Exception {
             Object instruction = param.args[0];
             String name = (String) XposedHelpers.callMethod(instruction, "getFullName");
-            Object optional = XposedHelpers.callMethod(instruction, "getDialogId");
-            if (!Boolean.TRUE.equals(XposedHelpers.callMethod(optional, "isPresent"))) return;
-            String dialog = (String) XposedHelpers.callMethod(optional, "get");
+            String dialog = (String) optionalValue(XposedHelpers.callMethod(instruction, "getDialogId"));
+            if (dialog == null) return;
+            DuplexVoice duplex = duplexVoice;
+            if (duplex != null && duplex.engine() == param.thisObject && inboundDuplex(param, duplex, instruction, name, dialog)) return;
             String owner = owned.get(dialog);
             if (owner == null) return;
             if (!config().optBoolean("enabled", false)) {
@@ -358,8 +381,41 @@ public final class HookEntry implements IXposedHookLoadPackage {
             param.setResult(null);
         }
 
+        private boolean inboundDuplex(XC_MethodHook.MethodHookParam param, DuplexVoice duplex, Object instruction,
+                                      String name, String dialog) throws Exception {
+            if (name.equals("SpeechRecognizer.RecognizeResult")) {
+                Class<?> state = XposedHelpers.findClass(adapter.duplexState(), loader);
+                if (!Boolean.TRUE.equals(XposedHelpers.callStaticMethod(state, "isInContinuousDialog"))) return false;
+                String currentStream = (String) XposedHelpers.callMethod(XposedHelpers.getStaticObjectField(state, "a"), "getEventId");
+                if (!duplex.turns().recognize(currentStream, dialog)) return false;
+                Object payload = XposedHelpers.callMethod(instruction, "getPayload");
+                if (!Boolean.TRUE.equals(XposedHelpers.callMethod(payload, "isFinal"))) return true;
+                Object results = XposedHelpers.callMethod(payload, "getResults");
+                if (!(results instanceof List<?> list) || list.isEmpty()) return true;
+                String text = (String) XposedHelpers.callMethod(list.get(0), "getText");
+                if (text.trim().isEmpty() || !duplex.turns().finish(dialog)) return true;
+                JSONObject config = config();
+                PendingVoice pending = duplex.profile();
+                Profile profile = ModeProfiles.resolve(config, pending.route(), pending.thinking());
+                if (config.optBoolean("enabled", false) && profile.enabled()) {
+                    param.setObjectExtra("voice", new VoiceRequest(config, profile, pending.route(), dialog, text, pending.input()));
+                }
+                return true;
+            }
+            if (!duplex.turns().owns(dialog)) return false;
+            // The recognizer still manages listening, VAD and the native continuous-dialog state.
+            if (!name.startsWith("SpeechRecognizer.") && !name.equals("Nlp.StartPreStream")) param.setResult(null);
+            return true;
+        }
+
+        private Object optionalValue(Object optional) {
+            return optional != null && Boolean.TRUE.equals(XposedHelpers.callMethod(optional, "isPresent"))
+                    ? XposedHelpers.callMethod(optional, "get") : null;
+        }
+
         private record VoiceRequest(JSONObject config, Profile profile, String route, String dialog, String text, ImageBridge.Input input) {}
         private record PendingVoice(ImageBridge.Input input, boolean thinking, String route) {}
+        private record DuplexVoice(Object engine, DuplexTurns turns, PendingVoice profile) {}
 
         private void own(String dialog, String route) {
             synchronized (owned) {
