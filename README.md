@@ -1,0 +1,87 @@
+# 小爱 Switch
+
+<img src="assets/icon/xiaoai-switch-anime-original.png" width="112" height="112" alt="小爱 Switch 图标">
+
+[![开源协议：GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?logo=gnu)](LICENSE)
+[![Android 构建状态](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml/badge.svg?branch=dev)](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml)
+[![源码版本：0.10.2](https://img.shields.io/badge/version-0.10.2-blue)](app/build.gradle)
+[![Android API 27+](https://img.shields.io/badge/Android-API%2027%2B-3DDC84?logo=android&logoColor=white)](#兼容性)
+[![LSPosed 模块](https://img.shields.io/badge/LSPosed-Xposed%20API%2082-orange)](#兼容性)
+[![GitHub Stars](https://img.shields.io/github/stars/SeimoDev/XiaoAiSwitch?logo=github)](https://github.com/SeimoDev/XiaoAiSwitch/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/SeimoDev/XiaoAiSwitch?logo=github)](https://github.com/SeimoDev/XiaoAiSwitch/forks)
+[![GitHub Issues](https://img.shields.io/github/issues/SeimoDev/XiaoAiSwitch)](https://github.com/SeimoDev/XiaoAiSwitch/issues)
+
+自定义超级小爱的文本、语音、绘图和手机控制模型。用一个 LSPosed 模块管理 AI Provider、模型与 System Prompt，结果仍在小爱的原生界面显示。
+
+[使用方法](#使用方法) · [从源码构建](#从源码构建) · [贡献指南](CONTRIBUTING.md) · [反馈问题](https://github.com/SeimoDev/XiaoAiSwitch/issues/new) · [Star 趋势](#star-趋势)
+
+## 功能
+
+- **模型管理**：兼容 OpenAI API，也支持在手机独立登录并直连 Codex 订阅。文本和语音的默认／思考模式可分别选模型和提示词。
+- **文本与语音**：文本回答使用原生 Markdown 排版；语音保留小爱的语音识别和 TTS。
+- **绘图**：支持文生图、原图编辑和放大预览。可用独立图片 API，或直接使用 Codex 订阅绘图。
+- **手机控制**：支持截图、点击、滑动和输入；沿用原厂 AI 智控权限和全局光效，可随时停止。
+
+## 兼容性
+
+| 项目 | 参数 |
+| --- | --- |
+| 应用包名 | `io.github.xiaoaiswitch` |
+| 小爱作用域 | `com.miui.voiceassist` |
+| 已适配小爱版本 | `7.11.20.3514`（`507011020`）；`8.2.70.8421`（`508002070`，对话、语音和绘图；手机控制走原厂） |
+| Android SDK | `minSdk 27` · `targetSdk 35` · `compileSdk 36` |
+| 模块加载 | LSPosed，声明最低 Xposed API 82 |
+| 真机验证 | 小米平板 5 · Android 16 · LSPosed 2.2.1 |
+| 构建工具链 | JDK 17 · Gradle 8.13 · AGP 8.13.2 · Kotlin 2.3.20 · Miuix 0.8.7 |
+| 默认分支 | `dev` |
+
+模块启动时会校验已知 Hook 的参数、返回类型和 Handler。遇到新版本时，运行状态可提示是否匹配已知结构，仍保留原厂链路，防止接管到错误的方法。只有当新版入口或行为有实质变化时，才需重新定位和验证；详见 [8.2 适配记录](analysis/voiceassist-8.2.md)。
+
+设置页支持 Android 14 及以上的预测性返回：在手势导航模式下侧滑可预览上一页，中途取消不改变页面，也不提交配置草稿。
+
+## 使用方法
+
+1. 安装模块 APK，在 LSPosed 中为模块勾选 **超级小爱**，然后重启小爱进程。
+2. 打开 **小爱 Switch → AI Provider**，添加 OpenAI 兼容源或登录 Codex 订阅。
+3. 在各通道的模型配置页选择 Provider、模型与 System Prompt，保存后打开首页的 **模块接管**。
+
+| 配置 | 说明 |
+| --- | --- |
+| API Endpoint / API Token | 在 Provider 中统一配置。例如 `https://HOST/v1`；对话也接受完整的 `/chat/completions` 地址。 |
+| Model / System Prompt | 每个通道和模式独立选择。兼容对话源发送 `role: system`；绘图使用提示词前缀。 |
+| 默认通道 / 自动分流 | 在通用设置配置。也可用 `/chat 文本`、`/voice 文本`、`/draw 描述`、`/control 任务` 显式切换。 |
+| 手机控制 | 模型需支持图像和工具调用；调用上限为 1–30 次。使用屏幕上的停止按钮中止。 |
+
+## 从源码构建
+
+安装 JDK 17 与 Android SDK 36，通过 `ANDROID_HOME` 或本地 `local.properties` 的 `sdk.dir` 指定 SDK 位置。
+
+```bash
+git clone --branch dev https://github.com/SeimoDev/XiaoAiSwitch.git
+cd XiaoAiSwitch/core
+../gradlew test jacocoTestCoverageVerification :app:lintDebug :app:assembleDebug :app:assembleRelease
+```
+
+Windows 可将 `../gradlew` 替换为 `..\gradlew.bat`。CI 执行相同的测试、JaCoCo 覆盖率门槛、lint 和构建任务；不连接真实设备。
+
+回到仓库根目录安装调试 APK：
+
+```powershell
+adb -s SERIAL install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+## 贡献与文档
+
+- [贡献指南](CONTRIBUTING.md) · [问题反馈](https://github.com/SeimoDev/XiaoAiSwitch/issues)
+- [AI Provider 注册表](analysis/provider-registry.md) · [默认与思考模式](analysis/thinking-modes.md) · [Codex 订阅绘图](analysis/codex-images.md)
+- [小爱 AIVS 协议](https://developers.xiaoai.mi.com/documents/Home?type=%2Fapi%2Fdoc%2Frender_markdown%2FVoiceserviceAccess%2FDevice%2Fdevelop%2FProtocolDocument%2FEndpointOverview) · [LSPosed 模块作用域](https://github.com/LSPosed/LSPosed/wiki/Module-Scope)
+
+## 开源协议
+
+本项目源代码按 [GNU General Public License v3.0 only（GPL-3.0-only）](LICENSE) 发布。第三方组件的授权见 [NOTICE](NOTICE.md)。
+
+## Star 趋势
+
+[![小爱 Switch 的 GitHub Star 趋势](assets/star-history.svg)](https://github.com/SeimoDev/XiaoAiSwitch/stargazers)
+
+GitHub Actions 每日读取仓库公开的 Star 总数，记录采样到的变化；不收集点 Star 的用户信息。

@@ -1,0 +1,31 @@
+name: Android CI
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Test signature detection and Star history
+        working-directory: scripts
+        run: python3 -m unittest test_assistant_version test_star_history -q
+      - name: Test, lint and build
+        working-directory: core
+        run: ../gradlew --no-daemon test jacocoTestCoverageVerification :app:lintDebug :app:assembleDebug :app:assembleRelease
