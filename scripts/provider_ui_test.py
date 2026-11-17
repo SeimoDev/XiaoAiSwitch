@@ -204,13 +204,13 @@ def main():
         tree("model-wide")
         back()
         tap("menu_general")
-        tap("steps_plus")
+        edit("control_steps", "42")
         tap("default_route")
         choose("语音")
         tap("save_settings")
         node("save_feedback", scroll=False)
         current = config()
-        assert current["enabled"] is False and current["controlSteps"] == 13 and current["defaultRoute"] == "voice"
+        assert current["enabled"] is False and current["controlSteps"] == 42 and current["defaultRoute"] == "voice"
         assert current["chat"]["providerId"] == provider("UI_DEFAULT")[0]
         assert current["chat"]["thinking"]["providerId"] == provider("UI_THINK")[0]
         assert current["chat"]["thinking"]["model"] == "FIXTURE_THINKING"

@@ -50,11 +50,12 @@ public class SettingsConfigTest {
 
     @Test public void validatesDefaultRouteAndIntegerStepBudget() {
         assertThrows(IllegalArgumentException.class, () -> SettingsConfig.save(new JSONObject().put("defaultRoute", "unknown"), 1));
-        for (Object steps : new Object[]{0, 31, 1.5, "2"}) {
+        for (Object steps : new Object[]{0, -1, 1.5, "2", (long) Integer.MAX_VALUE + 1}) {
             assertThrows(IllegalArgumentException.class, () -> SettingsConfig.save(new JSONObject().put("controlSteps", steps), 1));
         }
         assertEquals(1, SettingsConfig.save(new JSONObject().put("controlSteps", 1), 1).getInt("controlSteps"));
-        assertEquals(30, SettingsConfig.save(new JSONObject().put("controlSteps", 30), 1).getInt("controlSteps"));
+        assertEquals(120, SettingsConfig.save(new JSONObject().put("controlSteps", 120), 1).getInt("controlSteps"));
+        assertEquals(Integer.MAX_VALUE, SettingsConfig.save(new JSONObject().put("controlSteps", Integer.MAX_VALUE), 1).getInt("controlSteps"));
     }
 
     @Test public void savesIndependentThinkingProfileAndNormalizesItsModel() {

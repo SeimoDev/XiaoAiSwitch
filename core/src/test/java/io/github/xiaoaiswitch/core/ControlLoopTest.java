@@ -87,11 +87,33 @@ public class ControlLoopTest {
                 @Override public String screenshot() { return "screen"; }
                 @Override public JSONObject execute(ControlProtocol.Action action) { return new JSONObject().put("ok", true); }
             };
-            assertThrows(ControlLoop.StepLimit.class, () -> ControlLoop.run(profile, "task", environment, 1,
+            assertThrows(ControlLoop.StepLimit.class, () -> ControlLoop.run(profile, "task", environment, 35,
                     () -> true, new ModelClient.Cancellation(), ignored -> {}));
-            assertEquals(1, calls.get());
+            assertEquals(35, calls.get());
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test public void permissionDenialStopsBeforeAnyOtherActionOrScreenshot() {
+        AtomicInteger screenshots = new AtomicInteger();
+        AtomicInteger attempts = new AtomicInteger();
+        ControlLoop.Environment environment = new ControlLoop.Environment() {
+            @Override public String screenshot() { screenshots.incrementAndGet(); return "screen"; }
+            @Override public JSONObject execute(ControlProtocol.Action action) {
+                attempts.incrementAndGet();
+                throw new SecurityException("denied");
+            }
+        };
+        JSONObject request = new JSONObject("""
+                {"choices":[{"message":{"tool_calls":[
+                    {"id":"FIRST","function":{"name":"screenshot","arguments":"{}"}},
+                    {"id":"SECOND","function":{"name":"screenshot","arguments":"{}"}}
+                ]}}]}
+                """);
+        assertThrows(SecurityException.class, () -> ControlLoop.run(Profile.parse(new JSONObject()), "task", environment,
+                1, () -> true, new ModelClient.Cancellation(), ignored -> {}, (profile, input, cancel) -> request));
+        assertEquals(1, attempts.get());
+        assertEquals(1, screenshots.get());
     }
 }

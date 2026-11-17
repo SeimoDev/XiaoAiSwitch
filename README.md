@@ -4,7 +4,7 @@
 
 [![开源协议：GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?logo=gnu)](LICENSE)
 [![Android 构建状态](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml/badge.svg?branch=dev)](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml)
-[![源码版本：0.10.2](https://img.shields.io/badge/version-0.10.2-blue)](app/build.gradle)
+[![源码版本：0.10.3](https://img.shields.io/badge/version-0.10.3-blue)](app/build.gradle)
 [![Android API 27+](https://img.shields.io/badge/Android-API%2027%2B-3DDC84?logo=android&logoColor=white)](#兼容性)
 [![LSPosed 模块](https://img.shields.io/badge/LSPosed-Xposed%20API%2082-orange)](#兼容性)
 [![GitHub Stars](https://img.shields.io/github/stars/SeimoDev/XiaoAiSwitch?logo=github)](https://github.com/SeimoDev/XiaoAiSwitch/stargazers)
@@ -31,7 +31,7 @@
 | 已适配小爱版本 | `7.11.20.3514`（`507011020`）；`8.2.70.8421`（`508002070`，对话、语音和绘图；手机控制走原厂） |
 | Android SDK | `minSdk 27` · `targetSdk 35` · `compileSdk 36` |
 | 模块加载 | LSPosed，声明最低 Xposed API 82 |
-| 真机验证 | 小米平板 5 · Android 16 · LSPosed 2.2.1 |
+| 真机验证 | 小米平板 5（Android 16、LSPosed 2.2.1）；`2304FPN6DC`（[8.2 验证记录](analysis/voiceassist-8.2.md)） |
 | 构建工具链 | JDK 17 · Gradle 8.13 · AGP 8.13.2 · Kotlin 2.3.20 · Miuix 0.8.7 |
 | 默认分支 | `dev` |
 
@@ -49,8 +49,8 @@
 | --- | --- |
 | API Endpoint / API Token | 在 Provider 中统一配置。例如 `https://HOST/v1`；对话也接受完整的 `/chat/completions` 地址。 |
 | Model / System Prompt | 每个通道和模式独立选择。兼容对话源发送 `role: system`；绘图使用提示词前缀。 |
-| 默认通道 / 自动分流 | 在通用设置配置。也可用 `/chat 文本`、`/voice 文本`、`/draw 描述`、`/control 任务` 显式切换。 |
-| 手机控制 | 模型需支持图像和工具调用；调用上限为 1–30 次。使用屏幕上的停止按钮中止。 |
+| 默认通道 / 自动分流 | 在通用设置配置。自动分流没有固定调用上限；模型给出最终答复或任务取消时结束。也可用 `/chat 文本`、`/voice 文本`、`/draw 描述`、`/control 任务` 显式切换。 |
+| 手机控制 | 模型需支持图像和工具调用；可在通用设置填写调用上限（正整数，默认 12 次），达到后自动停止。也可手动中止。 |
 
 ## 从源码构建
 

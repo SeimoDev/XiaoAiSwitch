@@ -45,11 +45,15 @@ def main():
         return adb("shell", "su -c " + shlex.quote(command))
 
     def capture(name):
-        adb("shell", "uiautomator dump /sdcard/xa-fixture.xml")
-        xml = adb("shell", "cat /sdcard/xa-fixture.xml")
-        directory.joinpath(name + ".xml").write_bytes(xml)
         directory.joinpath(name + ".png").write_bytes(adb("exec-out", "screencap", "-p"))
-        return ET.fromstring(xml)
+        for _ in range(3):
+            location = "/data/local/tmp/xasw-fixture.xml"
+            if b"dumped to" not in adb("shell", "uiautomator", "dump", location):
+                continue
+            xml = adb("shell", "cat", location)
+            directory.joinpath(name + ".xml").write_bytes(xml)
+            return ET.fromstring(xml)
+        raise AssertionError("UIAutomator did not get an idle window; see the saved screenshot")
 
     app = "io.github.xiaoaiswitch"
     records = Path(args.records)

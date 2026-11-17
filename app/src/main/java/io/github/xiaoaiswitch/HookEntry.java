@@ -406,9 +406,10 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 } catch (Exception error) {
                     if (!current(request, config.optLong("revision"))) return;
                     deliver(engine, request, AivsProtocol.textResponse(dialog, text,
-                            error instanceof ControlLoop.StepLimit || error instanceof DialogueLoop.StepLimit || error instanceof ModelClient.HttpError || error instanceof CodexClient.LoginRequired ? error.getMessage()
+                            error instanceof ControlLoop.StepLimit || error instanceof ModelClient.HttpError || error instanceof CodexClient.LoginRequired || error instanceof SecurityException ? error.getMessage()
                                     : "模型请求失败（" + error.getClass().getSimpleName() + "），请检查配置和服务状态。"), false, "");
-                    report(context, "自定义请求失败：" + error.getClass().getSimpleName());
+                    report(context, error instanceof SecurityException ? "操作已停止：" + error.getMessage()
+                            : "自定义请求失败：" + error.getClass().getSimpleName());
                 } finally {
                     runningHttp.compareAndSet(cancellation, null);
                 }

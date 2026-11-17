@@ -188,6 +188,7 @@ internal fun SwitchRow(title: String, summary: String, checked: Boolean, tag: St
 
 @Composable
 internal fun Field(label: String, value: String, tag: String, prompt: Boolean = false, secret: Boolean = false,
+                   keyboardType: KeyboardType = if (secret) KeyboardType.Password else KeyboardType.Text,
                    onChange: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(label, fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceSecondary)
@@ -195,7 +196,7 @@ internal fun Field(label: String, value: String, tag: String, prompt: Boolean = 
             useLabelAsPlaceholder = true, singleLine = !prompt, minLines = if (prompt) 5 else 1,
             modifier = Modifier.fillMaxWidth().testTag(tag).semantics { contentDescription = label },
             backgroundColor = MiuixTheme.colorScheme.surface,
-            keyboardOptions = KeyboardOptions(keyboardType = if (secret) KeyboardType.Password else KeyboardType.Text),
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
             visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None)
     }
 }

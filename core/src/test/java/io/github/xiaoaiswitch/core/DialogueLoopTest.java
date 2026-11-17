@@ -5,13 +5,63 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class DialogueLoopTest {
+    @Test public void delegationMayContinuePastFourModelCallsUntilFinalAnswer() throws Exception {
+        Profile profile = Profile.parse(new JSONObject().put("model", "PLANNER"));
+        JSONObject request = DialogueProtocol.request(profile, new JSONArray(), "生成图像", "", true, false);
+        AtomicInteger calls = new AtomicInteger();
+        AtomicInteger images = new AtomicInteger();
+        DialogueLoop.Result result = DialogueLoop.run(profile, request, true, false, task ->
+                new DialogueLoop.Result("完成", List.of("https://HOST/image-" + images.incrementAndGet() + ".png")),
+                () -> true, new ModelClient.Cancellation(), (active, input, cancel) -> {
+                    if (calls.incrementAndGet() == 7) {
+                        return new JSONObject("{\"choices\":[{\"message\":{\"content\":\"全部完成\"}}]}");
+                    }
+                    return DialogueProtocolTest.response("generate_image", new JSONObject().put("prompt", "猫"));
+                });
+        assertEquals(7, calls.get());
+        assertEquals(6, result.images().size());
+        assertEquals("全部完成", result.text());
+    }
+
+    @Test public void cancellationAfterTheOldLimitDiscardsThePendingToolCall() {
+        Profile profile = Profile.parse(new JSONObject().put("model", "PLANNER"));
+        JSONObject request = DialogueProtocol.request(profile, new JSONArray(), "打开设置", "", false, true);
+        ModelClient.Cancellation cancellation = new ModelClient.Cancellation();
+        AtomicInteger calls = new AtomicInteger();
+        AtomicInteger actions = new AtomicInteger();
+        assertThrows(CancellationException.class, () -> DialogueLoop.run(profile, request, false, true, task -> {
+            actions.incrementAndGet();
+            return new DialogueLoop.Result("完成", List.of());
+        }, () -> true, cancellation, (active, input, cancel) -> {
+            if (calls.incrementAndGet() == 6) cancel.cancel();
+            return DialogueProtocolTest.response("control_phone", new JSONObject().put("task", "打开设置"));
+        }));
+        assertEquals(6, calls.get());
+        assertEquals(5, actions.get());
+    }
+
+    @Test public void permissionDenialCannotTriggerADialogueRetry() {
+        Profile profile = Profile.parse(new JSONObject().put("model", "PLANNER"));
+        JSONObject request = DialogueProtocol.request(profile, new JSONArray(), "打开设置", "", false, true);
+        AtomicInteger calls = new AtomicInteger();
+        assertThrows(SecurityException.class, () -> DialogueLoop.run(profile, request, false, true, task -> {
+            throw new SecurityException("denied");
+        }, () -> true, new ModelClient.Cancellation(), (active, input, cancel) -> {
+            calls.incrementAndGet();
+            return DialogueProtocolTest.response("control_phone", new JSONObject().put("task", "打开设置"));
+        }));
+        assertEquals(1, calls.get());
+    }
     @Test public void actualHttpDelegationReturnsToolResultBeforeFinalAnswer() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         List<JSONObject> requests = new ArrayList<>();

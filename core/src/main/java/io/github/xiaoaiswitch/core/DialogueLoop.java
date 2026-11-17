@@ -12,9 +12,6 @@ public final class DialogueLoop {
 
     public record Result(String text, List<String> images) {}
     public interface Environment { Result execute(DialogueProtocol.Task task) throws Exception; }
-    public static final class StepLimit extends IllegalStateException {
-        private StepLimit() { super("对话自动分流达到 4 次模型调用上限"); }
-    }
 
     public static Result run(Profile profile, JSONObject request, boolean images, boolean control, Environment environment,
                              BooleanSupplier current, ModelClient.Cancellation cancellation) throws Exception {
@@ -25,7 +22,7 @@ public final class DialogueLoop {
                              BooleanSupplier current, ModelClient.Cancellation cancellation, ModelClient.Transport transport) throws Exception {
         List<String> output = new ArrayList<>();
         JSONArray messages = request.getJSONArray("messages");
-        for (int step = 0; step < 4; step++) {
+        while (true) {
             check(current, cancellation);
             JSONObject response = transport.chat(profile, request, cancellation);
             check(current, cancellation);
@@ -39,7 +36,7 @@ public final class DialogueLoop {
                     Result value = environment.execute(task);
                     output.addAll(value.images());
                     result = new JSONObject().put("ok", true).put("message", value.text()).put("image_count", value.images().size());
-                } catch (CancellationException error) {
+                } catch (CancellationException | SecurityException error) {
                     throw error;
                 } catch (Exception error) {
                     result = new JSONObject().put("ok", false).put("error", error.getClass().getSimpleName());
@@ -47,7 +44,6 @@ public final class DialogueLoop {
                 messages.put(ControlProtocol.toolResult(task.id(), result));
             }
         }
-        throw new StepLimit();
     }
 
     private static void check(BooleanSupplier current, ModelClient.Cancellation cancellation) {

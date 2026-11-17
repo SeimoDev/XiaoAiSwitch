@@ -15,8 +15,8 @@ public final class SettingsConfig {
         if (!ROUTES.contains(route)) throw new IllegalArgumentException("请选择有效的默认通道");
         Object steps = draft.opt("controlSteps");
         if (steps != null && (!(steps instanceof Number number) || number.doubleValue() != number.intValue()
-                || number.intValue() < 1 || number.intValue() > 30)) {
-            throw new IllegalArgumentException("控制次数应在 1 到 30 之间");
+                || number.intValue() < 1)) {
+            throw new IllegalArgumentException("控制调用上限需为 1 到 2147483647 的整数");
         }
         for (String name : ROUTES) {
             JSONObject channel = result.optJSONObject(name);

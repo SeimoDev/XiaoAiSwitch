@@ -26,12 +26,12 @@ public final class ControlLoop {
 
     public static String run(Profile profile, String text, Environment environment, int limit, BooleanSupplier current,
                              ModelClient.Cancellation cancellation, IntConsumer progress, ModelClient.Transport transport) throws Exception {
-        if (limit < 1 || limit > 30) throw new IllegalArgumentException("控制步数应在 1 到 30 之间");
+        if (limit < 1) throw new IllegalArgumentException("控制调用上限需为正整数");
         check(current, cancellation);
         JSONArray messages = ControlProtocol.initialMessages(profile, text, environment.screenshot());
-        for (int step = 1; step <= limit; step++) {
+        for (int step = 0; step < limit; step++) {
             check(current, cancellation);
-            progress.accept(step);
+            progress.accept(step + 1);
             JSONObject response = transport.chat(profile, ControlProtocol.request(profile, messages), cancellation);
             check(current, cancellation);
             List<ControlProtocol.Action> actions = ControlProtocol.actions(response);
@@ -42,7 +42,7 @@ public final class ControlLoop {
                 JSONObject result;
                 try {
                     result = environment.execute(action);
-                } catch (CancellationException error) {
+                } catch (CancellationException | SecurityException error) {
                     throw error;
                 } catch (Exception error) {
                     result = new JSONObject().put("ok", false).put("error", error.getClass().getSimpleName());
