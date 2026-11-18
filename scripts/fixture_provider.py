@@ -158,11 +158,16 @@ class Handler(BaseHTTPRequestHandler):
                     {"id": "AUTO_" + str(user_index), "type": "function", "function": {"name": function, "arguments": json.dumps(arguments)}}]}}]}
         elif phone_tools:
             calls = sum(1 for message in body["messages"] if message.get("role") == "tool")
+            island_stop = any("CONTROL_ISLAND_CANCEL" in str(message.get("content", "")) for message in body["messages"])
+            if calls == 0 and island_stop:
+                time.sleep(30)
             if calls == 0 and any("CONTROL_CANCEL" in str(message.get("content", "")) for message in body["messages"]):
                 time.sleep(8)
             action = [("open_app", {"package": "com.android.settings"}), ("screenshot", {}), ("press_key", {"key": "home"})]
             goal = next((message["content"][0]["text"] for message in body["messages"]
                          if message.get("role") == "user" and isinstance(message.get("content"), list)), "")
+            if island_stop:
+                action = [("screenshot", {})]
             if goal.startswith("CONTROL_GESTURE "):
                 points = json.loads(goal.split(" ", 1)[1])
                 if calls == 0 and points.get("reopen_board"):

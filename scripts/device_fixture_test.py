@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--default-route", choices=["chat", "voice", "image", "control"])
     parser.add_argument("--expected-text")
     parser.add_argument("--cancel", action="store_true")
+    parser.add_argument("--island-stop", action="store_true", help="Wait for an actual tap on Stop in the expanded Super Island card.")
     parser.add_argument("--gesture", action="store_true")
     parser.add_argument("--full-screen", action="store_true", help="Start the original full-screen XiaoAi before the control fixture request.")
     parser.add_argument("--reopen-board", action="store_true", help="Reopen the original assistant board while the first model call is paused.")
@@ -38,6 +39,11 @@ def main():
     parser.add_argument("--registry", action="store_true")
     parser.add_argument("--system", action="store_true", help="Exercise the installed clock app's real launcher entry.")
     args = parser.parse_args()
+    if args.island_stop:
+        if args.route != "control" or not args.gesture:
+            parser.error("--island-stop requires --route control --gesture")
+        args.cancel = True
+        args.query = "CONTROL_ISLAND_CANCEL"
     if args.full_screen and not args.gesture:
         parser.error("--full-screen requires --gesture")
     if (args.reopen_board or args.control_launch or args.control_retry) and (not args.gesture or args.route != "control" or args.cancel or args.delegate):
@@ -337,12 +343,37 @@ def main():
                         time.sleep(.2)
                     assert "StepLimit" in status, "Control step limit was not enforced"
                     tree = capture(args.name)
-                    assert any("手机控制达到 1 次模型调用上限" in node.get("text", "") for node in tree.iter("node"))
+                    assert any("手机控制达到 1 步上限" in node.get("text", "") for node in tree.iter("node"))
                     assert len(records.read_text(encoding="utf-8").splitlines()) == before + 1
                     assert "XiaoAiSwitch Control Stop" not in root("dumpsys window windows").decode("utf-8")
                     print(json.dumps({"passed": True, "route": "control", "step_limit": 1}, ensure_ascii=False))
                     return
                 if args.cancel:
+                    if args.island_stop:
+                        def has_control_card():
+                            state = adb("shell", "dumpsys", "notification").decode("utf-8")
+                            return "xiaoaiswitch.control." in state.partition("Notification List:")[2].partition("Snoozed notifications:")[0]
+
+                        assert has_control_card(), "The task did not post its notification"
+                        assert "XiaoAiSwitch Control Stop" not in root("dumpsys window windows").decode("utf-8"), "Floating stop window was still present"
+                        print("Island fixture ready: expand the Super Island card and tap Stop.", flush=True)
+                        deadline = time.monotonic() + 29
+                        while time.monotonic() < deadline:
+                            state = ET.fromstring(adb("shell", "run-as", app, "cat", "shared_prefs/switch.xml"))
+                            if any(node.get("name") == "status" and node.text == "已停止自定义手机控制" for node in state):
+                                break
+                            time.sleep(.2)
+                        else:
+                            raise AssertionError("Did not observe a stop from Super Island")
+                        until = time.monotonic() + 3
+                        while has_control_card() and time.monotonic() < until:
+                            time.sleep(.1)
+                        assert not has_control_card(), "Control notification was left behind"
+                        time.sleep(max(0, deadline + 4 - time.monotonic()))
+                        assert len(records.read_text(encoding="utf-8").splitlines()) == before + 1
+                        assert control_fixture()["count"] == "0"
+                        print(json.dumps({"passed": True, "route": "control", "island_stop": True}))
+                        return
                     dump = root("dumpsys window windows").decode("utf-8")
                     blocks = re.split(r"\n  Window #\d+ ", dump)
                     window = next((block for block in blocks if "XiaoAiSwitch Control Stop" in block.splitlines()[0]), "")

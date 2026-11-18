@@ -8,6 +8,7 @@ import android.app.ActivityManager;
 import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
 import android.os.Handler;
+import android.os.Build;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.os.Process;
@@ -60,6 +61,7 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
     private final List<SavedWindow> windows = new ArrayList<>();
     private final List<BoardInput> boardInputs = new ArrayList<>();
     private Button button;
+    private ControlStopNotification stopCard;
     private Object global;
     private StockControlEffect effect;
     private Object board;
@@ -116,24 +118,49 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
                 Log.w("XiaoAiSwitch", "StockControlEffect start failed: " + error.getClass().getSimpleName() + ": " + error.getMessage());
                 report.accept("原厂控制光效启动失败：" + error.getClass().getSimpleName());
             }
-            button = new Button(context);
-            button.setText("停止控制");
-            button.setContentDescription("停止自定义手机控制");
-            button.setOnClickListener(view -> { close(); stop.run(); });
-            WindowManager.LayoutParams params = new WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT,
-                    WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                            | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
-                    PixelFormat.TRANSLUCENT);
-            params.gravity = Gravity.TOP | Gravity.END;
-            params.setTitle("XiaoAiSwitch Control Stop");
-            params.x = 16;
-            params.y = 80;
-            context.getSystemService(WindowManager.class).addView(button, params);
+            if (Build.VERSION.SDK_INT >= 33 && nativeAccess != null) {
+                stopCard = ControlStopNotification.start(context, loader, this::stopFromUser);
+                if (stopCard != null) return null;
+            }
+            attachStopButton();
             return null;
         });
         // OEM visibility changes are published on the next input-window transaction.
         if (nativeAccess != null) pause(650);
+        if (Build.VERSION.SDK_INT >= 33 && stopCard != null) {
+            ControlStopNotification card = stopCard;
+            long until = SystemClock.uptimeMillis() + 400;
+            while (!card.isPosted() && SystemClock.uptimeMillis() < until) pause(50);
+            if (!card.isPosted()) ui(() -> {
+                check();
+                card.close();
+                stopCard = null;
+                attachStopButton();
+                return null;
+            });
+        }
+    }
+
+    private void attachStopButton() {
+        button = new Button(context);
+        button.setText("停止控制");
+        button.setContentDescription("停止自定义手机控制");
+        button.setOnClickListener(view -> stopFromUser());
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON, PixelFormat.TRANSLUCENT);
+        params.gravity = Gravity.TOP | Gravity.END;
+        params.setTitle("XiaoAiSwitch Control Stop");
+        params.x = 16;
+        params.y = 80;
+        context.getSystemService(WindowManager.class).addView(button, params);
+    }
+
+    private void stopFromUser() {
+        if (closed.get() || !current.getAsBoolean()) return;
+        close();
+        stop.run();
     }
 
     private boolean suspendBoard(Object manager) {
@@ -175,12 +202,24 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
     }
 
     void progress(int step) {
-        main.post(() -> { if (!closed.get() && button != null) button.setText("停止控制 · " + step); });
+        stopStatus("第 " + step + " 步");
     }
 
     void retrying(int attempt) {
+        stopStatus("等待重试 " + attempt + "/" + ControlLoop.RETRY_LIMIT);
+    }
+
+    private void stopStatus(String status) {
         main.post(() -> {
-            if (!closed.get() && button != null) button.setText("停止 · 等待重试 " + attempt + "/" + ControlLoop.RETRY_LIMIT);
+            if (closed.get()) return;
+            if (Build.VERSION.SDK_INT >= 33 && stopCard != null) {
+                try {
+                    stopCard.update(status);
+                } catch (Exception error) {
+                    Log.w("XiaoAiSwitch", "Phone stop notification update: " + error.getClass().getSimpleName());
+                }
+            }
+            if (button != null) button.setText("停止控制 · " + status);
         });
     }
 
@@ -413,6 +452,14 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
                     if (effect != null) effect.close();
                     effect = null;
                 } finally {
+                    if (Build.VERSION.SDK_INT >= 33 && stopCard != null) {
+                        try {
+                            stopCard.close();
+                        } catch (RuntimeException error) {
+                            Log.w("XiaoAiSwitch", "Phone stop notification cleanup: " + error.getClass().getSimpleName());
+                        }
+                        stopCard = null;
+                    }
                     if (button != null && button.isAttachedToWindow()) context.getSystemService(WindowManager.class).removeView(button);
                     for (BoardInput saved : boardInputs) {
                         if (saved.view().isAttachedToWindow() && saved.view().getLayoutParams() instanceof WindowManager.LayoutParams params

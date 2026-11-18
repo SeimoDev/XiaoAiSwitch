@@ -4,7 +4,7 @@
 
 [![开源协议：GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?logo=gnu)](LICENSE)
 [![Android 构建状态](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml/badge.svg?branch=dev)](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml)
-[![源码版本：0.10.10](https://img.shields.io/badge/version-0.10.10-blue)](app/build.gradle)
+[![源码版本：0.10.11](https://img.shields.io/badge/version-0.10.11-blue)](app/build.gradle)
 [![Android API 27+](https://img.shields.io/badge/Android-API%2027%2B-3DDC84?logo=android&logoColor=white)](#兼容性)
 [![LSPosed 模块](https://img.shields.io/badge/LSPosed-Xposed%20API%2082-orange)](#兼容性)
 [![GitHub Stars](https://img.shields.io/github/stars/SeimoDev/XiaoAiSwitch?logo=github)](https://github.com/SeimoDev/XiaoAiSwitch/stargazers)
@@ -22,6 +22,7 @@
 - **识图**：可为小爱的图片问答单独选择支持图片输入的模型。绘图和图生图仍使用「绘图」配置。
 - **绘图**：支持文生图、原图编辑和放大预览。可用独立图片 API，或直接使用 Codex 订阅绘图。
 - **手机控制**：支持截图、点击、滑动和输入；沿用原厂 AI 智控权限和全局光效，可随时停止。
+- **超级岛停止**：支持超级岛的 8.2 新设备在控制时点击顶部「控制中」，展开后可选择「停止控制」；不再用悬浮按钮覆盖应用内容。
 - **系统工具**：文本与语音可打开已安装的应用、提交单次闹钟和倒计时，不依赖屏幕控制。
 - **原厂全局记忆**：8.2 的明确记忆命令（如“请记住……”或“查一下我的记忆……”）由原厂小爱处理，普通对话仍走自选模型。
 

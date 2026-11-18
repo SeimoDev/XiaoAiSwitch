@@ -27,3 +27,22 @@
 具备对应硬件的设备可进一步验证“原厂 Focus JSON / 图标纯构造器 + 独立通知 tag/id + 当前任务私有 PendingIntent”的组合，避免触碰原厂固定通知和控制会话；通知投递成功仍不等于 SystemUI 已展示岛，须以实机截图和实际停止回调验证。
 
 本轮未把原生顶层 SmartCapsuleView、真正 SystemUI Alive Island 和固定浮动停止按钮混为同一能力，也未隐藏当前可用的停止回退。
+
+## 0.10.11 独立控制通知
+
+8.2 路径在实际小爱进程内，使用当前包的通知权限、Focus 协议版本以及原厂
+`supportIsLand` / `hasFocusPermission` 检查。卡片使用 [小米公开超级岛通知格式](https://dev.mi.com/xiaomihyperos/documentation/detail?pId=2131)：
+摘要态只显示「控制中」，不自动展开；展开态 `param_v2.actions` 的 `type:2` 显示
+「停止控制」，链接到 `miui.focus.actions` 中同名的平台 Action。
+
+模块只发布自己的通知：独立频道、每次任务独立 tag、不可变单次 PendingIntent 和非导出
+当前任务接收器。不调用 OEM 全局上岛、通知清理或停止任务入口。取消、完成和失败时清除
+本任务通知及动作。普通通知仍提供停止动作；连通知都发不出时保留原来的停止悬浮窗。
+
+真机回归脚本：`python scripts/device_fixture_test.py --registry --gesture --island-stop --serial SERIAL --route control --query CONTROL_ISLAND_CANCEL`。
+与已启动的本机 `scripts/fixture_provider.py` 配合，等测试任务暂停在唯一的模型请求时，
+实际展开超级岛并点右侧停止。断言没有应用上的停止悬浮窗、取消状态成立、通知移除且
+即使服务端延后给出下一步也不会再有模型调用。脚本不读取或改写原厂的任务会话。
+
+已在 8.2 真机验证：顶部摘要显示「控制中」；展开显示「停止控制」。点击后状态变为
+「已停止自定义手机控制」，系统随后撤销本次通知，测试服务没有收到第二次请求。

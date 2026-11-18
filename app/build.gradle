@@ -10,8 +10,8 @@ android {
         applicationId 'io.github.xiaoaiswitch'
         minSdk 27
         targetSdk 35
-        versionCode 20
-        versionName '0.10.10'
+        versionCode 21
+        versionName '0.10.11'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
