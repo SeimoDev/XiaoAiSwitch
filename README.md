@@ -4,7 +4,7 @@
 
 [![开源协议：GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?logo=gnu)](LICENSE)
 [![Android 构建状态](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml/badge.svg?branch=dev)](https://github.com/SeimoDev/XiaoAiSwitch/actions/workflows/build.yml)
-[![源码版本：0.10.11](https://img.shields.io/badge/version-0.10.11-blue)](app/build.gradle)
+[![正式版本](https://img.shields.io/github/v/release/SeimoDev/XiaoAiSwitch)](https://github.com/SeimoDev/XiaoAiSwitch/releases/latest)
 [![Android API 27+](https://img.shields.io/badge/Android-API%2027%2B-3DDC84?logo=android&logoColor=white)](#兼容性)
 [![LSPosed 模块](https://img.shields.io/badge/LSPosed-Xposed%20API%2082-orange)](#兼容性)
 [![GitHub Stars](https://img.shields.io/github/stars/SeimoDev/XiaoAiSwitch?logo=github)](https://github.com/SeimoDev/XiaoAiSwitch/stargazers)
@@ -45,7 +45,7 @@
 
 ## 使用方法
 
-1. 安装模块 APK，在 LSPosed 中为模块勾选 **超级小爱**，然后重启小爱进程。
+1. 从 [GitHub Releases](https://github.com/SeimoDev/XiaoAiSwitch/releases/latest) 下载并安装正式版 APK，在 LSPosed 中为模块勾选 **超级小爱**，然后重启小爱进程。
 2. 打开 **小爱 Switch → AI Provider**，添加 OpenAI 兼容源或登录 Codex 订阅。
 3. 在各通道的模型配置页选择 Provider、模型与 System Prompt，保存后打开首页的 **模块接管**。
 
