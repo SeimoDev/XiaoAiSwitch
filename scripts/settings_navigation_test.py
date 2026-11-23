@@ -1,4 +1,4 @@
-"""Check press feedback and the toolbar back button on the real settings screens."""
+"""Check press feedback, the toolbar back button and project links on the real settings screens."""
 
 import argparse
 import io
@@ -17,6 +17,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial", required=True)
     parser.add_argument("--predictive", action="store_true", help="Exercise Android 14+ edge gestures in gesture navigation mode")
+    parser.add_argument("--project-links", action="store_true", help="Verify that both home page links launch Android VIEW intents")
     args = parser.parse_args()
 
     def adb(*command):
@@ -88,6 +89,37 @@ def main():
             node("menu_chat")
             print("Predictive back passed: in-gesture preview, cancellation and committed return")
         print("Navigation test passed: press feedback, 48dp back action, and click to return")
+        if args.project_links:
+            for tag, host in (("project_repository", "github.com"), ("project_telegram", "t.me")):
+                width, height = screen().size
+                adb("shell", "input", "swipe", str(width // 2), str(height * 3 // 4),
+                    str(width // 2), str(height // 4), "350")
+                rect = bounds(node(tag))
+                before = set(adb("logcat", "-d", "-s", "ActivityTaskManager:I").decode(errors="replace").splitlines())
+                adb("shell", "input", "tap", *tap_at(rect))
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    lines = adb("logcat", "-d", "-s", "ActivityTaskManager:I").decode(errors="replace").splitlines()
+                    if any(
+                        line not in before and "act=android.intent.action.VIEW" in line
+                        and f"dat=https://{host}/" in line for line in lines
+                    ):
+                        break
+                    time.sleep(0.2)
+                else:
+                    raise AssertionError(f"{tag} did not launch a VIEW intent to {host}")
+                # Let the link handler come forward before returning, including browser first-run UI.
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    activities = adb("shell", "dumpsys", "activity", "activities").decode(errors="replace")
+                    if any("topResumedActivity=" in line and APP not in line for line in activities.splitlines()):
+                        break
+                    time.sleep(0.2)
+                else:
+                    raise AssertionError(f"{tag} did not open a link handler")
+                adb("shell", "am", "start", "-f", "0x10008000", "-n", APP + "/.SettingsActivity")
+                node("menu_chat")
+            print("Project links passed: GitHub and Telegram open external destinations")
     finally:
         adb("shell", "rm", "-f", LAYOUT)
 

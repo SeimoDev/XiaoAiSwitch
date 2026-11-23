@@ -1,7 +1,9 @@
 package io.github.xiaoaiswitch
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.SharedPreferences
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -164,6 +166,14 @@ private fun SettingsScreen() {
         scope.launch {
             feedback.newestSnackbarData()?.dismiss()
             feedback.showSnackbar(text, actionLabel = "知道了", duration = if (error) SnackbarDuration.Long else SnackbarDuration.Custom(6000))
+        }
+    }
+
+    fun openLink(url: String) {
+        try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (_: ActivityNotFoundException) {
+            notifySave("没有可打开此链接的应用", true)
         }
     }
 
@@ -381,6 +391,14 @@ private fun SettingsScreen() {
                                     ChoiceRow("通用设置", "默认通道、系统工具与控制预算", "menu_general") { page = "general"; message = null }
                                     ChoiceRow("AI Provider", "${providers.size} 个 · 统一管理服务与登录", "menu_providers") {
                                         providerReturn = "home"; page = "providers"; message = null
+                                    }
+                                }
+                                Section("项目与社区") {
+                                    ChoiceRow("开源仓库", "GitHub · SeimoDev/XiaoAiSwitch", "project_repository") {
+                                        openLink("https://github.com/SeimoDev/XiaoAiSwitch")
+                                    }
+                                    ChoiceRow("Telegram 频道", "t.me/xiaoaiswitch", "project_telegram") {
+                                        openLink("https://t.me/xiaoaiswitch")
                                     }
                                 }
                             }
