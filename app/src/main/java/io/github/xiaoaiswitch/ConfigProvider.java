@@ -8,6 +8,8 @@ import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.Process;
+import java.util.HashSet;
+import java.util.Set;
 
 public final class ConfigProvider extends ContentProvider {
     public static final Uri URI = Uri.parse("content://io.github.xiaoaiswitch.config");
@@ -40,7 +42,13 @@ public final class ConfigProvider extends ContentProvider {
         if ("status".equals(method) && arg != null) {
             android.content.SharedPreferences.Editor editor = getContext().getSharedPreferences("switch", 0).edit()
                     .putString("status", arg).putLong("seen", System.currentTimeMillis());
-            if (extras != null && extras.containsKey("moduleVersion")) editor.putInt("activeVersion", extras.getInt("moduleVersion"));
+            if (extras != null && extras.containsKey("moduleVersion")) {
+                var features = extras.getStringArrayList("features");
+                editor.putInt("activeVersion", extras.getInt("moduleVersion"))
+                        .putLong("assistantUpdateTime", extras.getLong("assistantUpdateTime"))
+                        .putString("compatibility", extras.getString("compatibility"))
+                        .putStringSet("features", features == null ? Set.of() : new HashSet<>(features));
+            }
             editor.apply();
             return result;
         }

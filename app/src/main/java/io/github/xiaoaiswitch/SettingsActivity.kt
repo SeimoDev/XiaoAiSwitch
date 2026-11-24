@@ -44,6 +44,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import io.github.xiaoaiswitch.AssistantVersion.Feature
 import io.github.xiaoaiswitch.core.SettingsConfig
 import io.github.xiaoaiswitch.core.CodexImages
 import io.github.xiaoaiswitch.core.AiProviders
@@ -84,10 +86,12 @@ private val providerNames = listOf("API Key / OpenAI 兼容源", "Codex 订阅")
 private fun SettingsScreen() {
     val context = LocalContext.current
     val appName = stringResource(R.string.app_name)
-    val assistant = remember(context) { runCatching { context.packageManager.getPackageInfo("com.miui.voiceassist", 0) }.getOrNull() }
-    val assistantAdapter = assistant?.let { AssistantVersion.forCode(it.versionCode) }
-    val customControlSupported = assistantAdapter?.phoneControl() == true
-    val nativeMemorySupported = assistantAdapter?.nativeQuery() != null
+    fun installedAssistant() = runCatching { context.packageManager.getPackageInfo("com.miui.voiceassist", 0) }.getOrNull()
+    var assistant by remember(context) { mutableStateOf(installedAssistant()) }
+    LifecycleResumeEffect(context) {
+        assistant = installedAssistant()
+        onPauseOrDispose {}
+    }
     val preferences = remember { context.getSharedPreferences("switch", 0) }
     val initial = remember { runCatching { AiProviders.normalize(JSONObject(preferences.getString("config", "{}") ?: "{}")).toString() }.getOrDefault("{}") }
     var draft by rememberSaveable { mutableStateOf(initial) }
@@ -120,7 +124,13 @@ private fun SettingsScreen() {
     var hook by remember { mutableStateOf(preferences.getString("status", "等待 LSPosed 加载") ?: "") }
     var seen by remember { mutableStateOf(preferences.getLong("seen", 0)) }
     var activeVersion by remember { mutableStateOf(preferences.getInt("activeVersion", 0)) }
-    val active = activeVersion == BuildConfig.VERSION_CODE
+    var matchedUpdate by remember { mutableStateOf(preferences.getLong("assistantUpdateTime", 0)) }
+    var compatibility by remember { mutableStateOf(preferences.getString("compatibility", null)) }
+    var matchedFeatures by remember { mutableStateOf(preferences.getStringSet("features", emptySet()).orEmpty().toSet()) }
+    val currentMatch = assistant?.lastUpdateTime == matchedUpdate
+    val active = currentMatch && activeVersion == BuildConfig.VERSION_CODE
+    val customControlSupported = active && Feature.CONTROL.name in matchedFeatures
+    val nativeMemorySupported = active && Feature.NATIVE_MEMORY.name in matchedFeatures
     val titles = listOf("文本对话", "语音对话", "绘图", "手机控制", "识图")
     fun parent(screen: String) = when (screen) {
         "home" -> null
@@ -139,6 +149,9 @@ private fun SettingsScreen() {
                 "status" -> hook = store.getString("status", "等待 LSPosed 加载") ?: ""
                 "seen" -> seen = store.getLong("seen", 0)
                 "activeVersion" -> activeVersion = store.getInt("activeVersion", 0)
+                "assistantUpdateTime" -> matchedUpdate = store.getLong("assistantUpdateTime", 0)
+                "compatibility" -> compatibility = store.getString("compatibility", null)
+                "features" -> matchedFeatures = store.getStringSet("features", emptySet()).orEmpty().toSet()
             }
         }
         preferences.registerOnSharedPreferenceChangeListener(listener)
@@ -429,13 +442,29 @@ private fun SettingsScreen() {
                             "status" -> Section("Hook 状态") {
                                 Text("模块版本 · ${BuildConfig.VERSION_NAME}", modifier = Modifier.testTag("diagnostic_version"))
                                 Text("安装的小爱 · ${assistant?.versionName ?: "未安装"}", color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                                val family = AssistantVersion.familyOf(assistant?.versionName)
+                                if (family != 0) Text("兼容模式 · ${family}.x（默认）", modifier = Modifier.testTag("hook_family"))
+                                Text(if (currentMatch) compatibility ?: "等待 LSPosed 加载" else "等待当前小爱进程自动匹配",
+                                    modifier = Modifier.testTag("hook_compatibility"))
+                                if (active) {
+                                    val features = Feature.values().filter { it != Feature.QUERY_CARD }
+                                    val matched = features.filter { it.name in matchedFeatures }.map { it.label }
+                                    val native = features.filterNot { it.name in matchedFeatures }.map { it.label }
+                                    Text("已匹配：${(listOf("文本对话") + matched).joinToString("、")}", fontSize = 12.sp)
+                                    if (native.isNotEmpty()) Text("保留原厂：${native.joinToString("、")}", fontSize = 12.sp,
+                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                                }
                                 SelectionContainer { Text(hook, fontSize = 14.sp, modifier = Modifier.testTag("hook_status")) }
                                 if (seen != 0L) Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(seen)),
                                     fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                                 TextButton("刷新状态", {
+                                    assistant = installedAssistant()
                                     hook = preferences.getString("status", "等待 LSPosed 加载") ?: ""
                                     seen = preferences.getLong("seen", 0)
                                     activeVersion = preferences.getInt("activeVersion", 0)
+                                    matchedUpdate = preferences.getLong("assistantUpdateTime", 0)
+                                    compatibility = preferences.getString("compatibility", null)
+                                    matchedFeatures = preferences.getStringSet("features", emptySet()).orEmpty().toSet()
                                 }, modifier = Modifier.fillMaxWidth().testTag("refresh_status"))
                             }
                         }

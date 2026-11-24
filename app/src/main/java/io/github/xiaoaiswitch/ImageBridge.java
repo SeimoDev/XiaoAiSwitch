@@ -37,9 +37,8 @@ final class ImageBridge {
         XposedHelpers.findAndHookMethod(mapping.producer(), loader, "saveImageLocalPath", String.class, String.class, new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) { remember((String) param.args[0], (String) param.args[1]); }
         });
-        boolean v8 = mapping.producer().equals("sj1.b");
-        XposedHelpers.findAndHookMethod(v8 ? "dp1.d3" : "zj0.m1", loader, "setMultiModalChain",
-                v8 ? "ap1.k" : "wj0.j", new XC_MethodHook() {
+        XposedHelpers.findAndHookMethod(mapping.chainOwner(), loader, "setMultiModalChain",
+                mapping.chain(), new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) { rememberChain(param.args[0]); }
         });
     }
@@ -123,7 +122,7 @@ final class ImageBridge {
                     XposedHelpers.findClass(mapping.preferences(), loader), "getString", id, "");
             // Ordinary attachments use image_cache_index, not the drawing module's default MMKV.
             if (path == null || path.isEmpty()) path = (String) XposedHelpers.callStaticMethod(XposedHelpers.findClass(
-                    mapping.preferences() + (mapping.producer().equals("sj1.b") ? "$f0" : "$d0"), loader), "getImageCacheIndex", id);
+                    mapping.cacheIndex(), loader), "getImageCacheIndex", id);
             if (path == null || path.isEmpty()) throw new IllegalStateException("未找到原图，请重新选择图片");
             result.add(loadSource(path, cancellation));
         }

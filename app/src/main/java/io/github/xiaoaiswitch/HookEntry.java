@@ -3,6 +3,7 @@ package io.github.xiaoaiswitch;
 import android.app.Application;
 import android.app.Dialog;
 import android.content.Context;
+import android.content.pm.PackageInfo;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -13,11 +14,13 @@ import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import androidx.core.content.pm.PackageInfoCompat;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
+import io.github.xiaoaiswitch.AssistantVersion.Feature;
 import io.github.xiaoaiswitch.core.AivsProtocol;
 import io.github.xiaoaiswitch.core.ChatProtocol;
 import io.github.xiaoaiswitch.core.Profile;
@@ -34,6 +37,7 @@ import io.github.xiaoaiswitch.core.CodexOAuth;
 import io.github.xiaoaiswitch.core.ModeProfiles;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -54,20 +58,26 @@ public final class HookEntry implements IXposedHookLoadPackage {
         XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class, new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) {
                 Context context = (Context) param.args[0];
+                PackageInfo host = null;
                 try {
-                    int version = context.getPackageManager().getPackageInfo(load.packageName, 0).versionCode;
+                    host = context.getPackageManager().getPackageInfo(load.packageName, 0);
                     Class<?> event = XposedHelpers.findClassIfExists("com.xiaomi.ai.api.common.Event", load.classLoader);
                     Class<?> instruction = XposedHelpers.findClassIfExists("com.xiaomi.ai.api.common.Instruction", load.classLoader);
-                    AssistantVersion adapter = AssistantVersion.forCode(version);
-                    if (adapter == null || !adapter.engine().matches(load.classLoader, event, instruction, Handler.class)) {
-                        report(context, "小爱版本未适配：" + version + "；"
-                                + AssistantVersion.detectedStructure(load.classLoader, event, instruction, Handler.class)
-                                + "；保持原厂链路");
+                    AssistantVersion.Compatibility compatibility = AssistantVersion.resolve(PackageInfoCompat.getLongVersionCode(host),
+                            host.versionName, load.classLoader, event, instruction, Handler.class, Context.class);
+                    if (compatibility == null) {
+                        int family = AssistantVersion.familyOf(host.versionName);
+                        String status = family == 0 ? "小爱版本不在兼容范围，保留原厂链路"
+                                : "已识别 " + family + ".x；对话结构未匹配，保留原厂链路";
+                        reportCompatibility(context, host, status, null);
                         return;
                     }
-                    new Runtime(context, load.classLoader, adapter).install(event, instruction);
+                    EnumSet<Feature> features = new Runtime(context, load.classLoader, compatibility).install(event, instruction);
+                    reportCompatibility(context, host, compatibility.exact() ? "已匹配内置版本" : "已自动匹配对话结构", features);
                 } catch (Throwable error) {
-                    report(context, "Hook 安装失败：" + error.getClass().getSimpleName());
+                    String failure = "Hook 安装失败：" + error.getClass().getSimpleName();
+                    if (host == null) report(context, failure);
+                    else reportCompatibility(context, host, failure, null);
                     XposedBridge.log("XiaoAiSwitch: install " + error.getClass().getSimpleName());
                 }
             }
@@ -75,13 +85,22 @@ public final class HookEntry implements IXposedHookLoadPackage {
     }
 
     static void report(Context context, String text) {
-        report(context, text, false);
+        report(context, text, null);
     }
 
-    private static void report(Context context, String text, boolean ready) {
+    private static void reportCompatibility(Context context, PackageInfo host, String status, EnumSet<Feature> features) {
+        Bundle extras = new Bundle();
+        extras.putInt("moduleVersion", features == null ? 0 : BuildConfig.VERSION_CODE);
+        extras.putLong("assistantUpdateTime", host.lastUpdateTime);
+        extras.putString("compatibility", status);
+        ArrayList<String> matched = new ArrayList<>();
+        if (features != null) for (Feature feature : features) matched.add(feature.name());
+        extras.putStringArrayList("features", matched);
+        report(context, status, extras);
+    }
+
+    private static void report(Context context, String text, Bundle extras) {
         try {
-            Bundle extras = new Bundle();
-            if (ready) extras.putInt("moduleVersion", BuildConfig.VERSION_CODE);
             context.getContentResolver().call(ConfigProvider.URI, "status", text, extras);
         } catch (RuntimeException error) {
             XposedBridge.log("XiaoAiSwitch: status provider " + error.getClass().getSimpleName());
@@ -92,6 +111,8 @@ public final class HookEntry implements IXposedHookLoadPackage {
         private final Context context;
         private final ClassLoader loader;
         private final AssistantVersion adapter;
+        private final boolean exact;
+        private final EnumSet<Feature> features = EnumSet.noneOf(Feature.class);
         private final ExecutorService network = Executors.newFixedThreadPool(2);
         private final AtomicLong generation = new AtomicLong();
         private final AtomicReference<PhoneControl> activeControl = new AtomicReference<>();
@@ -102,20 +123,24 @@ public final class HookEntry implements IXposedHookLoadPackage {
         private final ImageBridge images;
         private volatile DuplexVoice duplexVoice;
         private volatile String previousImage = "";
+        private volatile boolean ready;
         private long revision;
 
-        Runtime(Context context, ClassLoader loader, AssistantVersion adapter) {
+        Runtime(Context context, ClassLoader loader, AssistantVersion.Compatibility compatibility) {
             this.context = context;
             this.loader = loader;
-            this.adapter = adapter;
+            adapter = compatibility.adapter();
+            exact = compatibility.exact();
+            features.addAll(compatibility.features());
             images = new ImageBridge(context, loader, adapter.images());
         }
 
-        void install(Class<?> eventClass, Class<?> instructionClass) {
+        EnumSet<Feature> install(Class<?> eventClass, Class<?> instructionClass) {
             AssistantVersion.Engine engine = adapter.engine();
             Class<?> engineClass = XposedHelpers.findClass(engine.type(), loader);
             XposedHelpers.findAndHookMethod(engineClass, engine.post(), eventClass, new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    if (!ready) return;
                     try {
                         outbound(param);
                     } catch (Throwable error) {
@@ -125,6 +150,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
             });
             XposedHelpers.findAndHookMethod(engineClass, engine.receive(), instructionClass, new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    if (!ready) return;
                     try {
                         inbound(param);
                     } catch (Throwable error) {
@@ -152,14 +178,16 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     synchronized (histories) { histories.clear(); }
                 }
             });
-            List<String> unavailable = new ArrayList<>();
-            if (!installOptional("图片附件", images::install)) unavailable.add("图片附件");
-            if (!installOptional("绘图预览", () -> installGallery(instructionClass))) unavailable.add("绘图预览");
-            if (!installOptional("Markdown", () -> ReplyMarkdown.install(loader, adapter.markdown()))) unavailable.add("Markdown");
+            installOptional(Feature.ATTACHMENTS, images::install);
+            installOptional(Feature.DRAWING, () -> installGallery(instructionClass));
+            installOptional(Feature.MARKDOWN, () -> ReplyMarkdown.install(loader, adapter.markdown()));
             installOptional("测试入口", () -> FixtureSupport.install(context, loader, adapter));
-            if (!adapter.phoneControl()) unavailable.add("自定义手机控制");
-            report(context, "已加载：AIVS 对话、语音、识图与绘图 Hook；进程 " + android.os.Process.myPid()
-                    + (unavailable.isEmpty() ? "" : "；未接管：" + String.join("、", unavailable)), true);
+            ready = true;
+            return features;
+        }
+
+        private void installOptional(Feature feature, Runnable install) {
+            if (features.contains(feature) && !installOptional(feature.label, install)) features.remove(feature);
         }
 
         private boolean installOptional(String name, Runnable install) {
@@ -264,12 +292,12 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 }
                 return;
             }
-            boolean duplexStart = name.equals("SpeechRecognizer.DuplexRecognizeStarted") && adapter.duplexState() != null;
-            boolean voiceStart = duplexStart || name.equals("SpeechRecognizer.Recognize");
+            boolean duplexStart = name.equals("SpeechRecognizer.DuplexRecognizeStarted") && features.contains(Feature.DUPLEX);
+            boolean voiceStart = duplexStart || name.equals("SpeechRecognizer.Recognize") && features.contains(Feature.VOICE);
             boolean nativeVision = name.equals("MultiModal.ImageUnderstand");
             boolean nlp = name.equals("Nlp.Request") || name.equals("Nlp.RequestLargeLanguageModelContent");
             if (!nlp && !voiceStart && !name.equals("MultiModal.ImageGeneration") && !nativeVision) return;
-            if (nativeVision && !images.isAttachmentQuery(event)) return;
+            if (nativeVision && (!features.contains(Feature.ATTACHMENTS) || !images.isAttachmentQuery(event))) return;
             JSONObject config = config();
             if (!config.optBoolean("enabled", false)) {
                 duplexVoice = null;
@@ -280,23 +308,25 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 return;
             }
             String dialog = (String) XposedHelpers.callMethod(event, "getId");
-            if (nlp && adapter.nativeQuery() != null && isNativeMemoryCapture(event)) {
+            if (nlp && (adapter.nativeQuery() != null || !exact) && isNativeMemoryCapture(event)) {
                 // Preserve the original screen-collect session and its follow-up instructions.
                 keepNative(dialog, "截图收藏请求已交给原厂小爱");
                 return;
             }
             ImageBridge.Input input = images.inspect(event);
+            if (!input.ids().isEmpty() && !features.contains(Feature.ATTACHMENTS)) return;
             boolean visionEnabled = profile(config, "vision").enabled();
             if (nativeVision && !visionEnabled) {
                 report(context, "保留原厂：未启用自定义识图模型");
                 return;
             }
             boolean nativeDrawing = !nativeVision && input.drawing();
+            if (nativeDrawing && !features.contains(Feature.DRAWING)) return;
             boolean useVision = (nativeVision || (!input.ids().isEmpty() && !nativeDrawing)) && visionEnabled;
             if (voiceStart) {
                 duplexVoice = null;
                 String route = useVision ? "vision" : "voice";
-                boolean thinking = !useVision && ThinkingMode.isThinking(event, loader, adapter.dialogContext());
+                boolean thinking = !useVision && isThinking(event);
                 if (!ModeProfiles.resolve(config, route, thinking).enabled()) {
                     report(context, "保留原厂：语音通道未开启自定义模型");
                     return;
@@ -322,10 +352,13 @@ public final class HookEntry implements IXposedHookLoadPackage {
             }
             String text = images.query(event);
             String question = text;
-            if (!nativeVision && !nativeDrawing && input.ids().isEmpty() && useNativeMemory(config) && text != null) {
+            if (!nativeVision && !nativeDrawing && input.ids().isEmpty() && text != null
+                    && config.optBoolean("nativeMemory", true) && (!exact || features.contains(Feature.NATIVE_MEMORY))) {
                 String memoryQuery = MemoryCommand.query(text);
                 if (memoryQuery != null) {
-                    if (!memoryQuery.equals(text)) XposedHelpers.callMethod(XposedHelpers.callMethod(event, "getPayload"), "setQuery", memoryQuery);
+                    if (!memoryQuery.equals(text) && features.contains(Feature.NATIVE_MEMORY)) {
+                        XposedHelpers.callMethod(XposedHelpers.callMethod(event, "getPayload"), "setQuery", memoryQuery);
+                    }
                     keepNative(dialog, "全局记忆请求已交给原厂小爱");
                     return;
                 }
@@ -333,12 +366,12 @@ public final class HookEntry implements IXposedHookLoadPackage {
             if (nativeVision && (text == null || text.trim().isEmpty())) text = "请描述这张图片。";
             QueryRouter.Selection selection = QueryRouter.select(text == null ? "" : text,
                     config.optString("defaultRoute", "chat"), nativeDrawing, useVision);
-            if (selection.route().equals("control") && !canControl()) {
-                report(context, "保留原厂：本机自定义屏幕控制未就绪");
+            if (!supportsRoute(selection.route())) {
+                report(context, "保留原厂：通道尚未匹配或未就绪（" + selection.route() + "）");
                 return;
             }
             boolean thinking = (selection.route().equals("chat") || selection.route().equals("voice"))
-                    && ThinkingMode.isThinking(event, loader, adapter.dialogContext());
+                    && isThinking(event);
             Profile profile = ModeProfiles.resolve(config, selection.route(), thinking);
             if (!profile.enabled()) {
                 report(context, "保留原厂：通道未启用自定义模型（" + selection.route() + "）");
@@ -346,6 +379,20 @@ public final class HookEntry implements IXposedHookLoadPackage {
             }
             start(param.thisObject, config, profile, selection.route(), dialog, selection.text(), question, input, selection.route().equals("voice"));
             param.setResult(true);
+        }
+
+        private boolean isThinking(Object event) {
+            return ThinkingMode.isThinking(event, loader, features.contains(Feature.THINKING) ? adapter.dialogContext() : null);
+        }
+
+        private boolean supportsRoute(String route) {
+            return switch (route) {
+                case "voice" -> features.contains(Feature.VOICE);
+                case "vision" -> features.contains(Feature.ATTACHMENTS);
+                case "image" -> features.contains(Feature.DRAWING);
+                case "control" -> canControl();
+                default -> true;
+            };
         }
 
         private void onlyAsr(Object event) {
@@ -436,7 +483,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
         }
 
         private boolean useNativeMemory(JSONObject config) {
-            return adapter.nativeQuery() != null && config.optBoolean("nativeMemory", true);
+            return features.contains(Feature.NATIVE_MEMORY) && config.optBoolean("nativeMemory", true);
         }
 
         private boolean isNativeMemoryCapture(Object event) {
@@ -508,7 +555,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 own(nativeDialog, route);
             }
             boolean showQuestion = isDialogue && question != null && !question.trim().isEmpty()
-                    && (adapter.queryCardPolicyOwner() == null || Boolean.TRUE.equals(XposedHelpers.callStaticMethod(
+                    && (!features.contains(Feature.QUERY_CARD) || Boolean.TRUE.equals(XposedHelpers.callStaticMethod(
                     XposedHelpers.findClass(adapter.queryCardPolicyOwner(), loader), "shouldAddQueryCard", nativeDialog)));
             long request = generation.incrementAndGet();
             cancelPending();
@@ -553,7 +600,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     Profile imageProfile = profile(config, "image");
                     Profile controlProfile = profile(config, "control");
                     boolean auto = !route.equals("vision") && config.optBoolean("autoRoute", true);
-                    boolean imageTool = auto && imageProfile.enabled();
+                    boolean imageTool = auto && imageProfile.enabled() && features.contains(Feature.DRAWING);
                     boolean controlTool = auto && controlProfile.enabled() && canControl();
                     boolean systemTools = (route.equals("chat") || route.equals("voice")) && config.optBoolean("systemTools", false);
                     DialogueProtocol.Tools tools = new DialogueProtocol.Tools(imageTool, controlTool, systemTools);
@@ -658,7 +705,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
         }
 
         private boolean canControl() {
-            return adapter.phoneControl() && PhoneControl.available(context, loader, adapter.controlBackend());
+            return features.contains(Feature.CONTROL) && PhoneControl.available(context, loader, adapter.controlBackend());
         }
 
         private String control(JSONObject config, Profile profile, String text, long request, ModelClient.Cancellation cancellation) throws Exception {

@@ -3,6 +3,9 @@ package io.github.xiaoaiswitch;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.EnumSet;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 /** Raw DEX symbols for supported assistant builds, not JADX-generated aliases. */
 record AssistantVersion(
@@ -32,9 +35,28 @@ record AssistantVersion(
         }
     }
 
-    record Images(String producer, String preferences, String gallery, String glide) {}
+    record Images(String producer, String preferences, String gallery, String glide) {
+        String chainOwner() { return producer.equals("sj1.b") ? "dp1.d3" : "zj0.m1"; }
+        String chain() { return producer.equals("sj1.b") ? "ap1.k" : "wj0.j"; }
+        String cacheIndex() { return preferences + (producer.equals("sj1.b") ? "$f0" : "$d0"); }
+    }
     record Markdown(String operation, String fullCardFactory, String floatingCardFactory, String fullCard, String renderer) {}
     record ControlBackend(String permissions, String scope, String callback, String tasks, String capture, String window, String input) {}
+
+    enum Feature {
+        VOICE("语音"), DUPLEX("双工语音"), THINKING("思考模式"), ATTACHMENTS("图片附件"), DRAWING("绘图"),
+        MARKDOWN("Markdown"), NATIVE_MEMORY("全局记忆"), CONTROL("手机控制"), QUERY_CARD("输入卡片策略");
+
+        final String label;
+        Feature(String label) { this.label = label; }
+    }
+
+    record Compatibility(AssistantVersion adapter, boolean exact, Set<Feature> features) {
+        Compatibility { features = Set.copyOf(features); }
+        boolean supports(Feature feature) { return features.contains(feature); }
+    }
+
+    private static final Pattern FAMILY = Pattern.compile("(?i)(?:release-)?([78])(?:\\.[0-9]+)*(?:[-+_][0-9a-z._-]+)?");
 
     private static final AssistantVersion V7 = new AssistantVersion(
             new Engine("b30.o0", "u0", "y0", "W", "y", "b30.g", "b30.z0", "s10.b"),
@@ -50,20 +72,127 @@ record AssistantVersion(
             new ControlBackend("com.xiaomi.voiceassistant.utils.o6", "ws1.b$f", "u62.g", "r21.e", "r21.t",
                     "com.xiaomi.voiceassistant.utils.ba", "com.xiaomi.voiceassist.baselibrary.utils.h0"), "x51.m0", "p31.y0");
 
-    static AssistantVersion forCode(int versionCode) {
-        return switch (versionCode) {
-            case 507011020 -> V7;
-            case 508002070 -> V8;
+    static AssistantVersion forCode(long versionCode) {
+        if (versionCode == 507011020L) return V7;
+        if (versionCode == 508002070L) return V8;
+        return null;
+    }
+
+    static int familyOf(String versionName) {
+        if (versionName == null) return 0;
+        var version = FAMILY.matcher(versionName.trim());
+        return version.matches() ? version.group(1).charAt(0) - '0' : 0;
+    }
+
+    static Compatibility resolve(long versionCode, String versionName, ClassLoader loader, Class<?> event,
+                                 Class<?> instruction, Class<?> handler, Class<?> context) {
+        AssistantVersion candidate = switch (familyOf(versionName)) {
+            case 7 -> V7;
+            case 8 -> V8;
             default -> null;
+        };
+        if (candidate == null || !candidate.engine.matches(loader, event, instruction, handler)
+                || !probe(() -> member(loader, candidate.engine.session, "clearSession", false) == void.class
+                        && member(loader, "com.xiaomi.ai.api.common.APIUtils", "readInstruction", true, String.class) == instruction)) {
+            return null;
+        }
+
+        boolean exact = candidate == forCode(versionCode);
+        var verified = EnumSet.noneOf(Feature.class);
+        for (Feature feature : Feature.values()) {
+            if (candidate.hasMapping(feature) && (exact || probe(() -> candidate.matches(feature, loader, instruction, context)))) {
+                verified.add(feature);
+            }
+        }
+        // A voice session switched to ASR-only must still be able to return memory commands to the native handler.
+        if (candidate.nativeQuery != null && !verified.contains(Feature.NATIVE_MEMORY)) verified.remove(Feature.VOICE);
+        if (!verified.contains(Feature.VOICE)) verified.remove(Feature.DUPLEX);
+        return new Compatibility(candidate, exact, verified);
+    }
+
+    private boolean hasMapping(Feature feature) {
+        return switch (feature) {
+            case DUPLEX -> duplexState != null;
+            case NATIVE_MEMORY -> nativeQuery != null;
+            case CONTROL -> phoneControl;
+            case QUERY_CARD -> queryCardPolicyOwner != null;
+            default -> true;
         };
     }
 
-    static String detectedStructure(ClassLoader loader, Class<?> event, Class<?> instruction, Class<?> handlerType) {
-        boolean v7 = V7.engine().matches(loader, event, instruction, handlerType);
-        boolean v8 = V8.engine().matches(loader, event, instruction, handlerType);
-        if (v7 && v8) return "匹配到多个已知结构";
-        if (v7) return "匹配 7.11 结构";
-        if (v8) return "匹配 8.2 结构";
-        return "未匹配";
+    private boolean matches(Feature feature, ClassLoader loader, Class<?> instruction, Class<?> context)
+            throws ReflectiveOperationException {
+        return switch (feature) {
+            case VOICE -> {
+                Class<?> callback = type(loader, engine.ttsCallback);
+                Class<?> tts = type(loader, engine.tts);
+                yield callback.isInterface() && tts.isAssignableFrom(singleton(tts))
+                        && member(loader, engine.tts, "speakTts", false, String.class, callback, boolean.class) == String.class;
+            }
+            case DUPLEX -> member(loader, duplexState, "isInContinuousDialog", true) == boolean.class
+                    && member(loader, singleton(type(loader, duplexState)).getName(), "getEventId", false) == String.class;
+            case THINKING -> member(loader, dialogContext, "generateDialogStateContext", true) != void.class;
+            case ATTACHMENTS -> member(loader, images.producer, "saveImageLocalPath", false, String.class, String.class) == void.class
+                    && member(loader, images.chainOwner(), "setMultiModalChain", false, type(loader, images.chain())) == void.class
+                    && member(loader, images.preferences, "getString", true, String.class, String.class) == String.class
+                    && member(loader, images.cacheIndex(), "getImageCacheIndex", true, String.class) == String.class;
+            case DRAWING -> member(loader, images.gallery, "g", false, type(loader, "com.xiaomi.ai.api.Template$ImageLauncher")) == void.class
+                    && member(loader, images.gallery, "init", false, instruction) == void.class
+                    && member(loader, images.glide, "with", true, context) != void.class;
+            case MARKDOWN -> {
+                Class<?> holder = type(loader, "androidx.recyclerview.widget.RecyclerView$ViewHolder");
+                String streamedCard = "com.xiaomi.voiceassistant.instruction.card.stream.b";
+                Class<?> renderer = type(loader, markdown.renderer);
+                yield member(loader, markdown.operation, markdown.fullCardFactory, false, int.class) != void.class
+                        && member(loader, markdown.operation, markdown.floatingCardFactory, false, int.class) != void.class
+                        && member(loader, markdown.fullCard, "bindView", false, context, holder, int.class) == void.class
+                        && member(loader, streamedCard, "bindView", false, context, holder, int.class) == void.class
+                        && member(loader, streamedCard, "updateCardText", false, String.class) == void.class
+                        && member(loader, streamedCard, "updateToastText", false, String.class) == void.class
+                        && renderer.isAssignableFrom(singleton(renderer))
+                        && member(loader, markdown.renderer, "getMarkwon", false, context, boolean.class, boolean.class) != void.class;
+            }
+            case NATIVE_MEMORY -> {
+                String builder = nativeQuery + "$e";
+                type(loader, builder).getDeclaredConstructor();
+                yield member(loader, builder, "setQuery", false, String.class) == type(loader, builder)
+                        && member(loader, builder, "setQueryOrigin", false, String.class) == type(loader, builder)
+                        && member(loader, "com.xiaomi.voiceassistant.utils.p6", "getLastQueryOrigin", true) == String.class
+                        && member(loader, nativeQuery, "startQuery", true, member(loader, builder, "build", false)) == void.class
+                        && member(loader, duplexState, "exitContinuousDialogAndFinishStreamIfNeed", true) == void.class;
+            }
+            // Verification of the screen authorization lifecycle is done on the corresponding APK and device.
+            case CONTROL -> false;
+            case QUERY_CARD -> member(loader, queryCardPolicyOwner, "shouldAddQueryCard", true, String.class) == boolean.class;
+        };
+    }
+
+    private static Class<?> type(ClassLoader loader, String name) throws ClassNotFoundException {
+        return Class.forName(name, false, loader);
+    }
+
+    private static Class<?> singleton(Class<?> owner) throws NoSuchFieldException {
+        Field field = owner.getDeclaredField("a");
+        if (!Modifier.isStatic(field.getModifiers())) throw new NoSuchFieldException(owner.getName());
+        return field.getType();
+    }
+
+    private static Class<?> member(ClassLoader loader, String owner, String name, boolean isStatic, Class<?>... parameters)
+            throws ReflectiveOperationException {
+        Method method = type(loader, owner).getDeclaredMethod(name, parameters);
+        if (Modifier.isStatic(method.getModifiers()) != isStatic || Modifier.isAbstract(method.getModifiers())) {
+            throw new NoSuchMethodException(name);
+        }
+        return method.getReturnType();
+    }
+
+    private interface Probe { boolean matches() throws ReflectiveOperationException; }
+
+    private static boolean probe(Probe probe) {
+        try {
+            return probe.matches();
+        } catch (ReflectiveOperationException | LinkageError | SecurityException error) {
+            return false;
+        }
     }
 }

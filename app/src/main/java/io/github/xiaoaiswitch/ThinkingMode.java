@@ -18,6 +18,7 @@ final class ThinkingMode {
         }
         // Native duplex requests may upload DialogState separately. Its generator also
         // honors the one-shot "deep-think again" and "answer immediately" overrides.
+        if (dialogContext == null) return false;
         Object context = XposedHelpers.callStaticMethod(
                 XposedHelpers.findClass(dialogContext, loader), "generateDialogStateContext");
         return Boolean.TRUE.equals(flag(XposedHelpers.callMethod(context, "getPayload")));
