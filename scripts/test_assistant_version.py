@@ -99,6 +99,13 @@ public class CompatibilityTest {
                 Event.class, Instruction.class, Handler.class, Context.class);
         check(exact != null && exact.exact() && exact.supports(AssistantVersion.Feature.CONTROL),
                 "verified profile lost its native control support");
+        var renamed = new AssistantVersion.Engine(Exact.class.getName(), "post", "receive", "deliver", "y", "p31.g", "", "");
+        var dynamic = AssistantVersion.resolveDiscovered("8.2.81.1", renamed, loader,
+                Event.class, Instruction.class, Handler.class);
+        check(dynamic != null && dynamic.discovered() && dynamic.adapter().engine().equals(renamed)
+                && dynamic.features().isEmpty(), "discovered mapping must support text only");
+        check(AssistantVersion.resolveDiscovered("8.2.81.1", renamed, loader,
+                Event.class, null, Handler.class) == null, "discovery skipped runtime signature checks");
         check(AssistantVersion.resolve(508002071L, "9.0.1", loader,
                 Event.class, Instruction.class, Handler.class, Context.class) == null, "9.x was treated as 8.x");
         check(AssistantVersion.resolve(508002071L, "8.2.71", loader,

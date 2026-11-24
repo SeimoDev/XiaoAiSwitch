@@ -30,6 +30,7 @@ import io.github.xiaoaiswitch.core.QueryRouter;
 import io.github.xiaoaiswitch.core.ControlLoop;
 import io.github.xiaoaiswitch.core.DialogueProtocol;
 import io.github.xiaoaiswitch.core.DialogueLoop;
+import io.github.xiaoaiswitch.core.DialogueHookDiscovery;
 import io.github.xiaoaiswitch.core.DuplexTurns;
 import io.github.xiaoaiswitch.core.MemoryCommand;
 import io.github.xiaoaiswitch.core.CodexClient;
@@ -67,9 +68,8 @@ public final class HookEntry implements IXposedHookLoadPackage {
                             host.versionName, load.classLoader, event, instruction, Handler.class, Context.class);
                     if (compatibility == null) {
                         int family = AssistantVersion.familyOf(host.versionName);
-                        String status = family == 0 ? "小爱版本不在兼容范围，保留原厂链路"
-                                : "已识别 " + family + ".x；对话结构未匹配，保留原厂链路";
-                        reportCompatibility(context, host, status, null);
+                        if (family == 0) reportCompatibility(context, host, "小爱版本不在兼容范围，保留原厂链路", null);
+                        else discoverDialogue(context, host, load.classLoader, event, instruction);
                         return;
                     }
                     EnumSet<Feature> features = new Runtime(context, load.classLoader, compatibility).install(event, instruction);
@@ -82,6 +82,38 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 }
             }
         });
+    }
+
+    private static void discoverDialogue(Context context, PackageInfo host, ClassLoader loader, Class<?> event, Class<?> instruction) {
+        reportCompatibility(context, host, "正在本机查找对话 Hook，暂时保留原厂链路", null);
+        new Thread(() -> {
+            try {
+                Bundle result = context.getContentResolver().call(ConfigProvider.URI, "dialogueLayout", null, null);
+                if (result != null && result.getLong("version", -1) == PackageInfoCompat.getLongVersionCode(host)
+                        && result.getLong("updatedAt", -1) == host.lastUpdateTime) {
+                    var mapping = DialogueHookDiscovery.Layout.decode(result.getString("layout"));
+                    if (mapping != null) {
+                        var engine = new AssistantVersion.Engine(mapping.owner(), mapping.post(), mapping.receive(),
+                                mapping.deliver(), mapping.handler(), mapping.session(), "", "");
+                        var compatibility = AssistantVersion.resolveDiscovered(host.versionName, engine, loader, event, instruction, Handler.class);
+                        if (compatibility != null) {
+                            new Handler(Looper.getMainLooper()).post(() -> {
+                                try {
+                                    var features = new Runtime(context, loader, compatibility).install(event, instruction);
+                                    reportCompatibility(context, host, "已在本机匹配文本对话 Hook", features);
+                                } catch (Throwable error) {
+                                    reportCompatibility(context, host, "本机对话 Hook 加载失败，保留原厂链路", null);
+                                }
+                            });
+                            return;
+                        }
+                    }
+                }
+            } catch (RuntimeException | LinkageError error) {
+                // A scan failure must leave the original assistant usable.
+            }
+            reportCompatibility(context, host, "本机未找到唯一且通过校验的对话 Hook，保留原厂链路", null);
+        }, "XiaoAiSwitch-DialogueDiscovery").start();
     }
 
     static void report(Context context, String text) {
@@ -112,6 +144,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
         private final ClassLoader loader;
         private final AssistantVersion adapter;
         private final boolean exact;
+        private final boolean discovered;
         private final EnumSet<Feature> features = EnumSet.noneOf(Feature.class);
         private final ExecutorService network = Executors.newFixedThreadPool(2);
         private final AtomicLong generation = new AtomicLong();
@@ -131,6 +164,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
             this.loader = loader;
             adapter = compatibility.adapter();
             exact = compatibility.exact();
+            discovered = compatibility.discovered();
             features.addAll(compatibility.features());
             images = new ImageBridge(context, loader, adapter.images());
         }
@@ -181,7 +215,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
             installOptional(Feature.ATTACHMENTS, images::install);
             installOptional(Feature.DRAWING, () -> installGallery(instructionClass));
             installOptional(Feature.MARKDOWN, () -> ReplyMarkdown.install(loader, adapter.markdown()));
-            installOptional("测试入口", () -> FixtureSupport.install(context, loader, adapter));
+            if (!discovered) installOptional("测试入口", () -> FixtureSupport.install(context, loader, adapter));
             ready = true;
             return features;
         }
@@ -296,6 +330,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
             boolean voiceStart = duplexStart || name.equals("SpeechRecognizer.Recognize") && features.contains(Feature.VOICE);
             boolean nativeVision = name.equals("MultiModal.ImageUnderstand");
             boolean nlp = name.equals("Nlp.Request") || name.equals("Nlp.RequestLargeLanguageModelContent");
+            if (discovered && !nlp) return;
             if (!nlp && !voiceStart && !name.equals("MultiModal.ImageGeneration") && !nativeVision) return;
             if (nativeVision && (!features.contains(Feature.ATTACHMENTS) || !images.isAttachmentQuery(event))) return;
             JSONObject config = config();
@@ -386,6 +421,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
         }
 
         private boolean supportsRoute(String route) {
+            if (discovered) return route.equals("chat");
             return switch (route) {
                 case "voice" -> features.contains(Feature.VOICE);
                 case "vision" -> features.contains(Feature.ATTACHMENTS);
@@ -602,7 +638,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     boolean auto = !route.equals("vision") && config.optBoolean("autoRoute", true);
                     boolean imageTool = auto && imageProfile.enabled() && features.contains(Feature.DRAWING);
                     boolean controlTool = auto && controlProfile.enabled() && canControl();
-                    boolean systemTools = (route.equals("chat") || route.equals("voice")) && config.optBoolean("systemTools", false);
+                    boolean systemTools = !discovered && (route.equals("chat") || route.equals("voice")) && config.optBoolean("systemTools", false);
                     DialogueProtocol.Tools tools = new DialogueProtocol.Tools(imageTool, controlTool, systemTools);
                     List<String> attachments = new ArrayList<>();
                     for (ModelClient.Image image : attached) attachments.add(ImageBridge.dataUrl(image));

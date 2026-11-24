@@ -7,6 +7,7 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 dependencies {
+    implementation 'com.android.tools.smali:smali-dexlib2:3.0.10'
     compileOnly 'org.json:json:20240303'
     testImplementation 'org.json:json:20240303'
     testImplementation 'junit:junit:4.13.2'

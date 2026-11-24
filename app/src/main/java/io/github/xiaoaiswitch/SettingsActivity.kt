@@ -25,6 +25,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -91,6 +92,11 @@ private fun SettingsScreen() {
     LifecycleResumeEffect(context) {
         assistant = installedAssistant()
         onPauseOrDispose {}
+    }
+    LaunchedEffect(assistant?.lastUpdateTime) {
+        if (AssistantVersion.familyOf(assistant?.versionName) != 0) withContext(Dispatchers.IO) {
+            LocalHookDiscovery.find(context, false)
+        }
     }
     val preferences = remember { context.getSharedPreferences("switch", 0) }
     val initial = remember { runCatching { AiProviders.normalize(JSONObject(preferences.getString("config", "{}") ?: "{}")).toString() }.getOrDefault("{}") }

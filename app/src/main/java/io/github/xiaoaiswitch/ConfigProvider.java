@@ -20,6 +20,15 @@ public final class ConfigProvider extends ContentProvider {
         int uid = Binder.getCallingUid();
         if (uid != Process.myUid() && uid != targetUid()) throw new SecurityException("Caller not in module scope");
         Bundle result = new Bundle();
+        if ("dialogueLayout".equals(method)) {
+            var snapshot = LocalHookDiscovery.find(getContext(), true);
+            if (snapshot != null) {
+                result.putString("layout", snapshot.layout().encode());
+                result.putLong("version", snapshot.version());
+                result.putLong("updatedAt", snapshot.updatedAt());
+            }
+            return result;
+        }
         if ("codexCredentials".equals(method)) {
             try {
                 io.github.xiaoaiswitch.core.CodexOAuth.Tokens tokens = CodexAccounts.get(getContext()).credentials(

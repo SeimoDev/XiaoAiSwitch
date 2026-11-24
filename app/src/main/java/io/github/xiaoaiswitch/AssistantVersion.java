@@ -51,7 +51,7 @@ record AssistantVersion(
         Feature(String label) { this.label = label; }
     }
 
-    record Compatibility(AssistantVersion adapter, boolean exact, Set<Feature> features) {
+    record Compatibility(AssistantVersion adapter, boolean exact, boolean discovered, Set<Feature> features) {
         Compatibility { features = Set.copyOf(features); }
         boolean supports(Feature feature) { return features.contains(feature); }
     }
@@ -86,16 +86,8 @@ record AssistantVersion(
 
     static Compatibility resolve(long versionCode, String versionName, ClassLoader loader, Class<?> event,
                                  Class<?> instruction, Class<?> handler, Class<?> context) {
-        AssistantVersion candidate = switch (familyOf(versionName)) {
-            case 7 -> V7;
-            case 8 -> V8;
-            default -> null;
-        };
-        if (candidate == null || !candidate.engine.matches(loader, event, instruction, handler)
-                || !probe(() -> member(loader, candidate.engine.session, "clearSession", false) == void.class
-                        && member(loader, "com.xiaomi.ai.api.common.APIUtils", "readInstruction", true, String.class) == instruction)) {
-            return null;
-        }
+        AssistantVersion candidate = family(versionName);
+        if (candidate == null || !matchesDialogue(candidate.engine, loader, event, instruction, handler)) return null;
 
         boolean exact = candidate == forCode(versionCode);
         var verified = EnumSet.noneOf(Feature.class);
@@ -107,7 +99,29 @@ record AssistantVersion(
         // A voice session switched to ASR-only must still be able to return memory commands to the native handler.
         if (candidate.nativeQuery != null && !verified.contains(Feature.NATIVE_MEMORY)) verified.remove(Feature.VOICE);
         if (!verified.contains(Feature.VOICE)) verified.remove(Feature.DUPLEX);
-        return new Compatibility(candidate, exact, verified);
+        return new Compatibility(candidate, exact, false, verified);
+    }
+
+    static Compatibility resolveDiscovered(String versionName, Engine engine, ClassLoader loader, Class<?> event,
+                                           Class<?> instruction, Class<?> handler) {
+        AssistantVersion candidate = family(versionName);
+        if (candidate == null || !matchesDialogue(engine, loader, event, instruction, handler)) return null;
+        return new Compatibility(new AssistantVersion(engine, candidate.images, candidate.markdown, candidate.dialogContext,
+                candidate.thinkingState, null, false, null, null, null), false, true, Set.of());
+    }
+
+    private static AssistantVersion family(String versionName) {
+        return switch (familyOf(versionName)) {
+            case 7 -> V7;
+            case 8 -> V8;
+            default -> null;
+        };
+    }
+
+    private static boolean matchesDialogue(Engine engine, ClassLoader loader, Class<?> event, Class<?> instruction, Class<?> handler) {
+        return engine.matches(loader, event, instruction, handler)
+                && probe(() -> member(loader, engine.session, "clearSession", false) == void.class
+                        && member(loader, "com.xiaomi.ai.api.common.APIUtils", "readInstruction", true, String.class) == instruction);
     }
 
     private boolean hasMapping(Feature feature) {
