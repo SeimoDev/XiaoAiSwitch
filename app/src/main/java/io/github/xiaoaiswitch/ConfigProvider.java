@@ -25,6 +25,7 @@ public final class ConfigProvider extends ContentProvider {
             if (snapshot != null) {
                 if (snapshot.layout() != null) result.putString("layout", snapshot.layout().encode());
                 result.putString("symbols", snapshot.symbols());
+                result.putBoolean("reviewedControl", snapshot.reviewedControl());
                 result.putLong("version", snapshot.version());
                 result.putLong("updatedAt", snapshot.updatedAt());
             }

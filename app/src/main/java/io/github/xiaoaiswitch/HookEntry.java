@@ -99,7 +99,8 @@ public final class HookEntry implements IXposedHookLoadPackage {
                             mapping.handler(), mapping.session(), "", "");
                     if (engine != null) {
                         var discovered = AssistantVersion.resolveDiscovered(host.versionName, engine,
-                                LocalHookDiscovery.decodeSymbols(result.getString("symbols")), loader, event, instruction, Handler.class, Context.class);
+                                LocalHookDiscovery.decodeSymbols(result.getString("symbols")), result.getBoolean("reviewedControl", false),
+                                loader, event, instruction, Handler.class, Context.class);
                         if (discovered != null && (baseline == null || discovered.features().containsAll(baseline.features()))) {
                             compatibility = discovered;
                         }
@@ -760,8 +761,11 @@ public final class HookEntry implements IXposedHookLoadPackage {
             PhoneControl phone = new PhoneControl(context, loader, adapter.controlBackend(),
                     () -> current(request, config.optLong("revision")),
                     value -> report(context, value), () -> {
-                if (generation.compareAndSet(request, request + 1)) report(context, "已停止自定义手机控制");
-                cancellation.cancel();
+                boolean stopped = generation.compareAndSet(request, request + 1);
+                disconnectInBackground(cancellation);
+                if (stopped) {
+                    new Handler(Looper.getMainLooper()).post(() -> report(context, "已停止自定义手机控制"));
+                }
             });
             activeControl.set(phone);
             try {
@@ -828,9 +832,16 @@ public final class HookEntry implements IXposedHookLoadPackage {
 
         private void cancelPending() {
             PhoneControl phone = activeControl.getAndSet(null);
-            if (phone != null) phone.close();
             ModelClient.Cancellation pending = runningHttp.getAndSet(null);
-            if (pending != null) pending.cancel();
+            try {
+                if (pending != null) disconnectInBackground(pending);
+            } finally {
+                if (phone != null) phone.close();
+            }
+        }
+
+        private static void disconnectInBackground(ModelClient.Cancellation cancellation) {
+            cancellation.cancel(task -> new Thread(task, "XiaoAiSwitch-Disconnect").start());
         }
 
         private boolean current(long request, long expectedRevision) {
@@ -847,7 +858,9 @@ public final class HookEntry implements IXposedHookLoadPackage {
             AssistantVersion.Engine mapping = adapter.engine();
             Handler handler = (Handler) XposedHelpers.getObjectField(engine, mapping.handler());
             handler.post(() -> {
-                if (generation.get() != request) return;
+                if (generation.get() != request) {
+                    return;
+                }
                 try {
                     Class<?> api = XposedHelpers.findClass("com.xiaomi.ai.api.common.APIUtils", loader);
                     for (int index = 0; index < instructions.length(); index++) {

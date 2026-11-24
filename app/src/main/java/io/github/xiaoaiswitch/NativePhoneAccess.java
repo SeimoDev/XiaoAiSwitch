@@ -16,6 +16,7 @@ import android.view.InputEvent;
 import android.view.MotionEvent;
 import de.robv.android.xposed.XposedHelpers;
 import io.github.xiaoaiswitch.core.ControlLoop;
+import io.github.xiaoaiswitch.core.ControlTarget;
 import io.github.xiaoaiswitch.core.ControlViewport;
 import java.lang.reflect.Proxy;
 import java.util.List;
@@ -26,7 +27,6 @@ import java.util.function.Consumer;
 final class NativePhoneAccess {
     private static final String INJECT_EVENTS = "android.permission.INJECT_EVENTS";
     private static final int DISPLAY = Display.DEFAULT_DISPLAY;
-    private record Target(String pkg, int uid, int task, int rotation, int width, int height, ControlViewport viewport) {}
 
     private final Context context;
     private final ClassLoader loader;
@@ -34,7 +34,7 @@ final class NativePhoneAccess {
     private final Runnable check;
     private final Consumer<String> report;
     private final ControlDisplayViewport displayViewport;
-    private Target snapshot;
+    private ControlTarget snapshot;
     private String launched;
 
     NativePhoneAccess(Context context, ClassLoader loader, AssistantVersion.ControlBackend mapping,
@@ -82,7 +82,7 @@ final class NativePhoneAccess {
     }
 
     Bitmap capture() throws Exception {
-        Target next = foreground();
+        ControlTarget next = foreground();
         if (launched != null) {
             if (!next.pkg().equals(launched)) throw new ControlLoop.TransientRead("已请求打开目标应用，但它还没有进入前台");
         } else if (snapshot != null && !snapshot.equals(next)) {
@@ -116,12 +116,11 @@ final class NativePhoneAccess {
     }
 
     void requireAction() throws Exception {
-        if (snapshot == null || !snapshot.equals(foreground())) throw new SecurityException("目标窗口已变化，控制已停止");
-        authorize(snapshot);
+        authorize(requireSnapshot(foreground()));
     }
 
     void requireLaunch() {
-        Target current = foreground();
+        ControlTarget current = foreground();
         if (snapshot != null && !snapshot.equals(current)) throw new SecurityException("启动前前台窗口已变化，请重新发起");
     }
 
@@ -136,15 +135,18 @@ final class NativePhoneAccess {
     }
 
     void inject(InputEvent event) {
-        if (!(event instanceof MotionEvent motion) || motion.getActionMasked() != MotionEvent.ACTION_CANCEL) check.run();
+        boolean cleanup = event instanceof MotionEvent motion && motion.getActionMasked() == MotionEvent.ACTION_CANCEL;
         try {
             if (snapshot == null || context.checkSelfPermission(INJECT_EVENTS) != PackageManager.PERMISSION_GRANTED) {
                 throw new SecurityException("没有系统输入权限");
             }
+            // A cancel event may clean up an already-started gesture, but only in its original target.
+            ControlTarget bound = requireSnapshot(cleanup ? readForeground() : foreground());
             XposedHelpers.callMethod(event, "setDisplayId", DISPLAY);
             InputManager manager = context.getSystemService(InputManager.class);
+            if (!cleanup) check.run();
             if (manager == null || !Boolean.TRUE.equals(XposedHelpers.callMethod(manager, "injectInputEvent",
-                    event, 2, snapshot.uid()))) { // WAIT_FOR_FINISH: requires the exact target UID.
+                    event, 2, bound.uid()))) { // WAIT_FOR_FINISH: requires the exact target UID.
                 throw new SecurityException("触点没有命中正在授权操作的应用，已停止本次操作");
             }
         } catch (XposedHelpers.InvocationTargetError | LinkageError error) {
@@ -152,10 +154,22 @@ final class NativePhoneAccess {
         }
     }
 
-    void text(String text) { XposedHelpers.callMethod(singleton(mapping.input()), "insertFocusText", text); }
+    void text(String text) {
+        requireSnapshot(foreground());
+        XposedHelpers.callMethod(singleton(mapping.input()), "insertFocusText", text);
+    }
 
-    private Target foreground() {
+    private ControlTarget requireSnapshot(ControlTarget current) {
+        if (snapshot == null) throw new SecurityException("尚未取得授权的操作截图");
+        return snapshot.requireSame(current, "目标窗口已变化，控制已停止");
+    }
+
+    private ControlTarget foreground() {
         check.run();
+        return readForeground();
+    }
+
+    private ControlTarget readForeground() {
         if (Build.VERSION.SDK_INT < 29) throw new SecurityException("系统版本不支持此控制方式");
         try {
             if (context.getSystemService(KeyguardManager.class).isKeyguardLocked()) throw new SecurityException("请先解锁手机");
@@ -169,7 +183,8 @@ final class NativePhoneAccess {
             DisplayMetrics metrics = new DisplayMetrics();
             display.getRealMetrics(metrics);
             ControlViewport viewport = permitted(pkg, uid) ? displayViewport.read(display, metrics.widthPixels, metrics.heightPixels) : null;
-            return new Target(pkg, uid, info.taskId, display.getRotation(), metrics.widthPixels, metrics.heightPixels, viewport);
+            return new ControlTarget(pkg, info.topActivity.flattenToString(), uid, info.taskId, display.getRotation(),
+                    metrics.widthPixels, metrics.heightPixels, viewport);
         } catch (PackageManager.NameNotFoundException | XposedHelpers.InvocationTargetError | XposedHelpers.ClassNotFoundError | LinkageError error) {
             throw new SecurityException("系统未返回默认屏幕前台", error);
         }
@@ -186,14 +201,14 @@ final class NativePhoneAccess {
         return display;
     }
 
-    private void authorize(Target target) throws Exception {
+    private void authorize(ControlTarget target) throws Exception {
         request(true, target);
         if (!target.equals(foreground())) throw new SecurityException("授权期间前台窗口已变化");
         request(false, target);
         if (!target.equals(foreground())) throw new SecurityException("授权期间前台窗口已变化");
     }
 
-    private void request(boolean content, Target target) throws Exception {
+    private void request(boolean content, ControlTarget target) throws Exception {
         check.run();
         String label = content ? "屏幕内容" : "屏幕操控";
         CompletableFuture<Boolean> decision = new CompletableFuture<>();

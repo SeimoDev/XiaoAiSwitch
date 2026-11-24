@@ -108,15 +108,22 @@ public class CompatibilityTest {
         check(exact != null && exact.exact() && exact.supports(AssistantVersion.Feature.CONTROL),
                 "verified profile lost its native control support");
         var renamed = new AssistantVersion.Engine(Exact.class.getName(), "post", "receive", "deliver", "y", "p31.g", "", "");
-        var dynamic = AssistantVersion.resolveDiscovered("8.2.81.1", renamed, java.util.Map.of(), loader,
+        var dynamic = AssistantVersion.resolveDiscovered("8.2.81.1", renamed, java.util.Map.of(), false, loader,
                 Event.class, Instruction.class, Handler.class, Context.class);
         check(dynamic != null && dynamic.discovered() && dynamic.adapter().engine().type().equals(renamed.type())
                 && dynamic.features().equals(java.util.Set.of(AssistantVersion.Feature.QUERY_CARD)), "discovery lost an independently verified feature");
-        check(AssistantVersion.resolveDiscovered("8.2.81.1", renamed, java.util.Map.of(), loader,
+        check(AssistantVersion.resolveDiscovered("8.2.81.1", renamed, java.util.Map.of(), false, loader,
                 Event.class, null, Handler.class, Context.class) == null, "discovery skipped runtime signature checks");
+        var reused = AssistantVersion.resolveDiscovered("8.2.81.1", renamed, java.util.Map.of(), true, loader,
+                Event.class, Instruction.class, Handler.class, Context.class);
+        check(reused != null && reused.supports(AssistantVersion.Feature.CONTROL)
+                && reused.adapter().controlBackend().equals(current.controlBackend()), "only the reviewed native control backend should be reused");
+        var legacyReuse = AssistantVersion.resolveDiscovered("7.13.30", renamed, java.util.Map.of(), true, loader,
+                Event.class, Instruction.class, Handler.class, Context.class);
+        check(legacyReuse != null && !legacyReuse.supports(AssistantVersion.Feature.CONTROL), "unreviewed legacy version enabled control");
         var relocatedFeatures = AssistantVersion.resolveDiscovered("7.13.30", renamed, java.util.Map.of(
                 "tts", RenamedVoice.class.getName(), "ttsCallback", VoiceCallback.class.getName(), "ttsSingleton", "u",
-                "dialogContext", RenamedThinking.class.getName()), loader,
+                "dialogContext", RenamedThinking.class.getName()), false, loader,
                 Event.class, Instruction.class, Handler.class, Context.class);
         check(relocatedFeatures != null && relocatedFeatures.features().equals(java.util.Set.of(
                 AssistantVersion.Feature.VOICE, AssistantVersion.Feature.THINKING)), "renamed feature groups were not independently checked");

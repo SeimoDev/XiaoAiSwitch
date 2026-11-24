@@ -125,16 +125,20 @@ final class ControlStopNotification implements AutoCloseable {
     }
 
     @Override public void close() {
+        PendingIntent pending = intent;
+        intent = null;
         try {
-            if (intent != null) {
-                intent.cancel();
+            if (pending != null) {
                 manager.cancel(tag, ID);
-                intent = null;
             }
         } finally {
-            if (registered) {
-                registered = false;
-                context.unregisterReceiver(receiver);
+            try {
+                if (pending != null) pending.cancel();
+            } finally {
+                if (registered) {
+                    registered = false;
+                    context.unregisterReceiver(receiver);
+                }
             }
         }
     }

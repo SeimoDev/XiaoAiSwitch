@@ -122,13 +122,15 @@ record AssistantVersion(
         AssistantVersion candidate = family(versionName);
         if (candidate == null || !matchesDialogue(candidate.engine, loader, event, instruction, handler)) return null;
 
-        return candidate.verify(candidate == forCode(versionCode), false, loader, instruction, context);
+        return candidate.verify(candidate == forCode(versionCode), false, false, loader, instruction, context);
     }
 
-    private Compatibility verify(boolean exact, boolean discovered, ClassLoader loader, Class<?> instruction, Class<?> context) {
+    private Compatibility verify(boolean exact, boolean discovered, boolean reviewedControl, ClassLoader loader,
+                                   Class<?> instruction, Class<?> context) {
         var verified = EnumSet.noneOf(Feature.class);
         for (Feature feature : Feature.values()) {
-            if (hasMapping(feature) && (exact || probe(() -> matches(feature, loader, instruction, context)))) {
+            if (hasMapping(feature) && (exact || (feature == Feature.CONTROL ? reviewedControl
+                    : probe(() -> matches(feature, loader, instruction, context))))) {
                 verified.add(feature);
             }
         }
@@ -139,7 +141,8 @@ record AssistantVersion(
     }
 
     static Compatibility resolveDiscovered(String versionName, Engine engine, Map<String, String> symbols,
-                                           ClassLoader loader, Class<?> event, Class<?> instruction, Class<?> handler, Class<?> context) {
+                                           boolean reviewedControl, ClassLoader loader, Class<?> event, Class<?> instruction,
+                                           Class<?> handler, Class<?> context) {
         AssistantVersion candidate = family(versionName);
         if (candidate == null || !matchesDialogue(engine, loader, event, instruction, handler)) return null;
         Engine voice = complete(symbols, "tts", "ttsCallback", "ttsSingleton")
@@ -147,14 +150,15 @@ record AssistantVersion(
                 : engine.withVoice(candidate.engine.tts, candidate.engine.ttsCallback, candidate.engine.ttsSingleton);
         boolean duplex = complete(symbols, "duplex", "duplexSingleton");
         boolean memory = complete(symbols, "memoryQuery", "memoryBuilder", "memoryOrigin");
+        ControlBackend control = reviewedControl ? candidate.controlBackend : null;
         return new AssistantVersion(voice, candidate.images.discover(symbols), candidate.markdown.discover(symbols),
                 symbols.getOrDefault("dialogContext", candidate.dialogContext), candidate.thinkingState,
-                duplex ? symbols.get("duplex") : candidate.duplexState, false, null,
+                duplex ? symbols.get("duplex") : candidate.duplexState, control != null, control,
                 memory ? symbols.get("memoryQuery") : candidate.nativeQuery,
                 symbols.getOrDefault("queryCard", candidate.queryCardPolicyOwner),
                 duplex ? symbols.get("duplexSingleton") : candidate.duplexSingleton,
                 memory ? symbols.get("memoryBuilder") : candidate.nativeBuilder,
-                memory ? symbols.get("memoryOrigin") : candidate.nativeOrigin).verify(false, true, loader, instruction, context);
+                memory ? symbols.get("memoryOrigin") : candidate.nativeOrigin).verify(false, true, control != null, loader, instruction, context);
     }
 
     private static boolean complete(Map<String, String> symbols, String... keys) {

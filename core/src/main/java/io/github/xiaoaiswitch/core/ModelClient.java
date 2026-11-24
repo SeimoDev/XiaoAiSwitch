@@ -78,13 +78,16 @@ public final class ModelClient {
 
         public boolean isCancelled() { return cancelled; }
 
-        public void cancel() {
+        public void cancel() { cancel(Runnable::run); }
+
+        public void cancel(java.util.concurrent.Executor disconnect) {
             HttpURLConnection active;
             synchronized (this) {
+                if (cancelled) return;
                 cancelled = true;
                 active = connection;
             }
-            if (active != null) active.disconnect();
+            if (active != null) disconnect.execute(active::disconnect);
         }
 
         synchronized void attach(HttpURLConnection value) {

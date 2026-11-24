@@ -224,4 +224,38 @@ public class ControlLoopTest {
         assertEquals(1, attempts.get());
         assertEquals(1, screenshots.get());
     }
+
+    @Test public void deniedScreenAccessNeverSendsARequestOrRetries() {
+        var captures = new AtomicInteger();
+        var requests = new AtomicInteger();
+        var retries = new AtomicInteger();
+        var environment = new ControlLoop.Environment() {
+            @Override public String screenshot() { captures.incrementAndGet(); throw new SecurityException("declined"); }
+            @Override public JSONObject execute(ControlProtocol.Action action) { throw new AssertionError("No action expected"); }
+        };
+        assertThrows(SecurityException.class, () -> ControlLoop.run(Profile.parse(new JSONObject()), "task", environment,
+                3, () -> true, new ModelClient.Cancellation(), ignored -> {}, (profile, request, cancel) -> {
+                    requests.incrementAndGet(); return new JSONObject();
+                }, ignored -> retries.incrementAndGet()));
+        assertEquals(1, captures.get());
+        assertEquals(0, requests.get());
+        assertEquals(0, retries.get());
+    }
+
+    @Test public void lateModelResponseDoesNotActAfterStop() {
+        var cancellation = new ModelClient.Cancellation();
+        var actions = new AtomicInteger();
+        var environment = new ControlLoop.Environment() {
+            @Override public String screenshot() { return "screen"; }
+            @Override public JSONObject execute(ControlProtocol.Action action) { actions.incrementAndGet(); return new JSONObject(); }
+        };
+        assertThrows(CancellationException.class, () -> ControlLoop.run(Profile.parse(new JSONObject()), "task", environment,
+                3, () -> true, cancellation, ignored -> {}, (profile, request, cancel) -> {
+                    cancellation.cancel();
+                    return new JSONObject("""
+                            {"choices":[{"message":{"tool_calls":[{"id":"LATE","function":{"name":"screenshot","arguments":"{}"}}]}}]}
+                            """);
+                }));
+        assertEquals(0, actions.get());
+    }
 }

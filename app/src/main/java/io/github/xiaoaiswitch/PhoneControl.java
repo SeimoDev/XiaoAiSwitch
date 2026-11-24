@@ -159,8 +159,11 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
 
     private void stopFromUser() {
         if (closed.get() || !current.getAsBoolean()) return;
-        close();
-        stop.run();
+        try {
+            stop.run();
+        } finally {
+            close();
+        }
     }
 
     private boolean suspendBoard(Object manager) {
@@ -273,6 +276,8 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
         if (action instanceof ControlProtocol.OpenApp open) {
             Intent intent = context.getPackageManager().getLaunchIntentForPackage(open.packageName());
             if (intent == null) return new JSONObject().put("ok", false).put("error", "app_not_launchable");
+            if (nativeAccess != null) nativeAccess.requireLaunch();
+            check();
             context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             if (nativeAccess != null) nativeAccess.opened(open.packageName());
         } else if (nativeAccess != null) {
@@ -296,6 +301,7 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
                     KeyCharacterMap.VIRTUAL_KEYBOARD, 0, KeyEvent.FLAG_FROM_SYSTEM, InputDevice.SOURCE_KEYBOARD));
         }
         if (action instanceof ControlProtocol.TypeText text) {
+            check();
             Object manager = XposedHelpers.callStaticMethod(XposedHelpers.findClass("com.xiaomi.aiinput.AIInputTextManager", loader), "getInstance", context);
             if (manager == null || XposedHelpers.callMethod(manager, "getAIInputTextClient") == null) {
                 return new JSONObject().put("ok", false).put("error", "text_input_client_missing");
@@ -325,18 +331,18 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
                 }
             }
             if (!swipe) pause(duration);
-            if (nativeAccess != null) {
-                motion(down, MotionEvent.ACTION_UP, x2, y2);
-                finished = true;
-            }
+            motion(down, MotionEvent.ACTION_UP, x2, y2);
+            finished = true;
         } finally {
-            if (nativeAccess != null && sent && !finished) motion(down, MotionEvent.ACTION_CANCEL, x2, y2);
-            if (nativeAccess == null) {
+            if (nativeAccess != null && sent && !finished) {
                 try {
-                    motion(down, MotionEvent.ACTION_UP, x2, y2);
-                } finally {
-                    ui(() -> { if (!closed.get() && button != null) button.setVisibility(View.VISIBLE); return null; });
+                    motion(down, MotionEvent.ACTION_CANCEL, x2, y2);
+                } catch (SecurityException | CancellationException error) {
+                    // Keep the original stop reason if the old gesture target is already gone.
                 }
+            }
+            if (nativeAccess == null) {
+                ui(() -> { if (!closed.get() && button != null) button.setVisibility(View.VISIBLE); return null; });
             }
         }
     }
@@ -364,6 +370,7 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
                 nativeAccess.inject(event);
                 return;
             }
+            check();
             XposedHelpers.callMethod(event, "setDisplayId", 0);
             Object manager = XposedHelpers.callStaticMethod(XposedHelpers.findClass("android.hardware.input.InputManager", loader), "getInstance");
             // WAIT_FOR_FINISH reports actual dispatch; the native helper's ASYNC true only means queue admission.
@@ -448,19 +455,25 @@ final class PhoneControl implements ControlLoop.Environment, AutoCloseable {
         if (!closed.compareAndSet(false, true)) return;
         try {
             ui(() -> {
+                if (Build.VERSION.SDK_INT >= 33 && stopCard != null) {
+                    try {
+                        stopCard.close();
+                    } catch (RuntimeException error) {
+                        Log.w("XiaoAiSwitch", "Phone stop notification cleanup: " + error.getClass().getSimpleName());
+                    }
+                    stopCard = null;
+                }
+                try {
+                    if (button != null && button.isAttachedToWindow()) context.getSystemService(WindowManager.class).removeView(button);
+                } catch (RuntimeException error) {
+                    Log.w("XiaoAiSwitch", "Phone stop button cleanup: " + error.getClass().getSimpleName());
+                } finally {
+                    button = null;
+                }
                 try {
                     if (effect != null) effect.close();
                     effect = null;
                 } finally {
-                    if (Build.VERSION.SDK_INT >= 33 && stopCard != null) {
-                        try {
-                            stopCard.close();
-                        } catch (RuntimeException error) {
-                            Log.w("XiaoAiSwitch", "Phone stop notification cleanup: " + error.getClass().getSimpleName());
-                        }
-                        stopCard = null;
-                    }
-                    if (button != null && button.isAttachedToWindow()) context.getSystemService(WindowManager.class).removeView(button);
                     for (BoardInput saved : boardInputs) {
                         if (saved.view().isAttachedToWindow() && saved.view().getLayoutParams() instanceof WindowManager.LayoutParams params
                                 && (params.flags & BLOCK_BOARD_INPUT) == BLOCK_BOARD_INPUT) {
