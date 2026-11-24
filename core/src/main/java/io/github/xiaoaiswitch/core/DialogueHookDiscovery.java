@@ -20,6 +20,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
@@ -55,21 +56,11 @@ public final class DialogueHookDiscovery {
     public static Layout find(List<File> apks) throws IOException {
         var engines = new ArrayList<Engine>();
         var sessions = new HashMap<String, Integer>();
-        for (File apk : apks) {
-            try (var zip = new ZipFile(apk)) {
-                for (ZipEntry entry : dexEntries(zip)) {
-                    if (entry.getSize() <= 0 || entry.getSize() > MAX_DEX) return null;
-                    try (var input = new BufferedInputStream(zip.getInputStream(entry))) {
-                        var dex = DexBackedDexFile.fromInputStream(null, input);
-                        for (ClassDef type : dex.getClasses()) {
-                            if (isSession(type)) sessions.merge(type.getType(), 1, Integer::sum);
-                            Engine engine = engine(type);
-                            if (engine != null) engines.add(engine);
-                        }
-                    }
-                }
-            }
-        }
+        if (!visit(apks, type -> {
+            if (isSession(type)) sessions.merge(type.getType(), 1, Integer::sum);
+            Engine engine = engine(type);
+            if (engine != null) engines.add(engine);
+        })) return null;
         Layout found = null;
         for (Engine engine : engines) {
             var related = engine.sessions().stream().filter(type -> sessions.getOrDefault(type, 0) == 1).collect(Collectors.toList());
@@ -79,6 +70,20 @@ public final class DialogueHookDiscovery {
                     engine.handler(), className(related.get(0)));
         }
         return found == null ? null : Layout.decode(found.encode());
+    }
+
+    static boolean visit(List<File> apks, Consumer<ClassDef> visitor) throws IOException {
+        for (File apk : apks) {
+            try (var zip = new ZipFile(apk)) {
+                for (ZipEntry entry : dexEntries(zip)) {
+                    if (entry.getSize() <= 0 || entry.getSize() > MAX_DEX) return false;
+                    try (var input = new BufferedInputStream(zip.getInputStream(entry))) {
+                        for (ClassDef type : DexBackedDexFile.fromInputStream(null, input).getClasses()) visitor.accept(type);
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     public static String fingerprint(long versionCode, long updatedAt, List<File> apks) throws IOException {
@@ -91,9 +96,13 @@ public final class DialogueHookDiscovery {
                 }
             }
         }
+        return checksum(identity.toString());
+    }
+
+    static String checksum(String identity) {
         byte[] digest;
         try {
-            digest = MessageDigest.getInstance("SHA-256").digest(identity.toString().getBytes(StandardCharsets.UTF_8));
+            digest = MessageDigest.getInstance("SHA-256").digest(identity.getBytes(StandardCharsets.UTF_8));
         } catch (NoSuchAlgorithmException impossible) {
             throw new AssertionError(impossible);
         }

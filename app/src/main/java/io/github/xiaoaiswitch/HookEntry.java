@@ -66,10 +66,10 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     Class<?> instruction = XposedHelpers.findClassIfExists("com.xiaomi.ai.api.common.Instruction", load.classLoader);
                     AssistantVersion.Compatibility compatibility = AssistantVersion.resolve(PackageInfoCompat.getLongVersionCode(host),
                             host.versionName, load.classLoader, event, instruction, Handler.class, Context.class);
-                    if (compatibility == null) {
+                    if (compatibility == null || !compatibility.exact()) {
                         int family = AssistantVersion.familyOf(host.versionName);
                         if (family == 0) reportCompatibility(context, host, "小爱版本不在兼容范围，保留原厂链路", null);
-                        else discoverDialogue(context, host, load.classLoader, event, instruction);
+                        else discoverFeatures(context, host, load.classLoader, event, instruction, compatibility);
                         return;
                     }
                     EnumSet<Feature> features = new Runtime(context, load.classLoader, compatibility).install(event, instruction);
@@ -84,36 +84,44 @@ public final class HookEntry implements IXposedHookLoadPackage {
         });
     }
 
-    private static void discoverDialogue(Context context, PackageInfo host, ClassLoader loader, Class<?> event, Class<?> instruction) {
-        reportCompatibility(context, host, "正在本机查找对话 Hook，暂时保留原厂链路", null);
+    private static void discoverFeatures(Context context, PackageInfo host, ClassLoader loader, Class<?> event, Class<?> instruction,
+                                         AssistantVersion.Compatibility baseline) {
+        reportCompatibility(context, host, "正在本机查找各项 Hook，暂时保留原厂链路", null);
         new Thread(() -> {
+            AssistantVersion.Compatibility compatibility = baseline;
             try {
                 Bundle result = context.getContentResolver().call(ConfigProvider.URI, "dialogueLayout", null, null);
                 if (result != null && result.getLong("version", -1) == PackageInfoCompat.getLongVersionCode(host)
                         && result.getLong("updatedAt", -1) == host.lastUpdateTime) {
                     var mapping = DialogueHookDiscovery.Layout.decode(result.getString("layout"));
-                    if (mapping != null) {
-                        var engine = new AssistantVersion.Engine(mapping.owner(), mapping.post(), mapping.receive(),
-                                mapping.deliver(), mapping.handler(), mapping.session(), "", "");
-                        var compatibility = AssistantVersion.resolveDiscovered(host.versionName, engine, loader, event, instruction, Handler.class);
-                        if (compatibility != null) {
-                            new Handler(Looper.getMainLooper()).post(() -> {
-                                try {
-                                    var features = new Runtime(context, loader, compatibility).install(event, instruction);
-                                    reportCompatibility(context, host, "已在本机匹配文本对话 Hook", features);
-                                } catch (Throwable error) {
-                                    reportCompatibility(context, host, "本机对话 Hook 加载失败，保留原厂链路", null);
-                                }
-                            });
-                            return;
+                    AssistantVersion.Engine engine = baseline != null ? baseline.adapter().engine() : mapping == null ? null
+                            : new AssistantVersion.Engine(mapping.owner(), mapping.post(), mapping.receive(), mapping.deliver(),
+                            mapping.handler(), mapping.session(), "", "");
+                    if (engine != null) {
+                        var discovered = AssistantVersion.resolveDiscovered(host.versionName, engine,
+                                LocalHookDiscovery.decodeSymbols(result.getString("symbols")), loader, event, instruction, Handler.class, Context.class);
+                        if (discovered != null && (baseline == null || discovered.features().containsAll(baseline.features()))) {
+                            compatibility = discovered;
                         }
                     }
                 }
             } catch (RuntimeException | LinkageError error) {
                 // A scan failure must leave the original assistant usable.
             }
-            reportCompatibility(context, host, "本机未找到唯一且通过校验的对话 Hook，保留原厂链路", null);
-        }, "XiaoAiSwitch-DialogueDiscovery").start();
+            if (compatibility == null) {
+                reportCompatibility(context, host, "本机未找到唯一且通过校验的对话 Hook，保留原厂链路", null);
+                return;
+            }
+            var selected = compatibility;
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    var features = new Runtime(context, loader, selected).install(event, instruction);
+                    reportCompatibility(context, host, selected.discovered() ? "已在本机校验功能 Hook" : "已匹配对话结构", features);
+                } catch (Throwable error) {
+                    reportCompatibility(context, host, "本机 Hook 加载失败，保留原厂链路", null);
+                }
+            });
+        }, "XiaoAiSwitch-HookDiscovery").start();
     }
 
     static void report(Context context, String text) {
@@ -236,7 +244,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
 
         private void installGallery(Class<?> instructionClass) {
             AssistantVersion.Images mapping = adapter.images();
-            XposedHelpers.findAndHookMethod(mapping.gallery(), loader, "g",
+            XposedHelpers.findAndHookMethod(mapping.gallery(), loader, mapping.galleryOpen(),
                     XposedHelpers.findClass("com.xiaomi.ai.api.Template$ImageLauncher", loader), new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam param) {
                     String source = previewSource(param.args[0]);
@@ -330,7 +338,6 @@ public final class HookEntry implements IXposedHookLoadPackage {
             boolean voiceStart = duplexStart || name.equals("SpeechRecognizer.Recognize") && features.contains(Feature.VOICE);
             boolean nativeVision = name.equals("MultiModal.ImageUnderstand");
             boolean nlp = name.equals("Nlp.Request") || name.equals("Nlp.RequestLargeLanguageModelContent");
-            if (discovered && !nlp) return;
             if (!nlp && !voiceStart && !name.equals("MultiModal.ImageGeneration") && !nativeVision) return;
             if (nativeVision && (!features.contains(Feature.ATTACHMENTS) || !images.isAttachmentQuery(event))) return;
             JSONObject config = config();
@@ -402,7 +409,11 @@ public final class HookEntry implements IXposedHookLoadPackage {
             QueryRouter.Selection selection = QueryRouter.select(text == null ? "" : text,
                     config.optString("defaultRoute", "chat"), nativeDrawing, useVision);
             if (!supportsRoute(selection.route())) {
-                report(context, "保留原厂：通道尚未匹配或未就绪（" + selection.route() + "）");
+                String status = selection.route().equals("control")
+                        ? (features.contains(Feature.CONTROL) ? "保留原厂：已匹配控制后端，但平台控制能力未就绪"
+                        : "保留原厂：当前版本未匹配已验证的手机控制后端")
+                        : "保留原厂：通道尚未匹配或未就绪（" + selection.route() + "）";
+                report(context, status);
                 return;
             }
             boolean thinking = (selection.route().equals("chat") || selection.route().equals("voice"))
@@ -421,7 +432,6 @@ public final class HookEntry implements IXposedHookLoadPackage {
         }
 
         private boolean supportsRoute(String route) {
-            if (discovered) return route.equals("chat");
             return switch (route) {
                 case "voice" -> features.contains(Feature.VOICE);
                 case "vision" -> features.contains(Feature.ATTACHMENTS);
@@ -491,7 +501,8 @@ public final class HookEntry implements IXposedHookLoadPackage {
             if (name.equals("SpeechRecognizer.RecognizeResult")) {
                 Class<?> state = XposedHelpers.findClass(adapter.duplexState(), loader);
                 if (!Boolean.TRUE.equals(XposedHelpers.callStaticMethod(state, "isInContinuousDialog"))) return false;
-                String currentStream = (String) XposedHelpers.callMethod(XposedHelpers.getStaticObjectField(state, "a"), "getEventId");
+                String currentStream = (String) XposedHelpers.callMethod(
+                        XposedHelpers.getStaticObjectField(state, adapter.duplexSingleton()), "getEventId");
                 if (!duplex.turns().recognize(currentStream, dialog)) return false;
                 Object payload = XposedHelpers.callMethod(instruction, "getPayload");
                 if (!Boolean.TRUE.equals(XposedHelpers.callMethod(payload, "isFinal"))) return true;
@@ -555,9 +566,9 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     XposedHelpers.callStaticMethod(XposedHelpers.findClass(adapter.duplexState(), loader),
                             "exitContinuousDialogAndFinishStreamIfNeed");
                     Class<?> replay = XposedHelpers.findClass(adapter.nativeQuery(), loader);
-                    Object builder = XposedHelpers.newInstance(XposedHelpers.findClass(adapter.nativeQuery() + "$e", loader));
+                    Object builder = XposedHelpers.newInstance(XposedHelpers.findClass(adapter.nativeBuilder(), loader));
                     String origin = (String) XposedHelpers.callStaticMethod(
-                            XposedHelpers.findClass("com.xiaomi.voiceassistant.utils.p6", loader), "getLastQueryOrigin");
+                            XposedHelpers.findClass(adapter.nativeOrigin(), loader), "getLastQueryOrigin");
                     XposedHelpers.callMethod(builder, "setQuery", voice.text());
                     XposedHelpers.callMethod(builder, "setQueryOrigin", origin);
                     XposedHelpers.callStaticMethod(replay, "startQuery", XposedHelpers.callMethod(builder, "build"));
@@ -638,7 +649,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     boolean auto = !route.equals("vision") && config.optBoolean("autoRoute", true);
                     boolean imageTool = auto && imageProfile.enabled() && features.contains(Feature.DRAWING);
                     boolean controlTool = auto && controlProfile.enabled() && canControl();
-                    boolean systemTools = !discovered && (route.equals("chat") || route.equals("voice")) && config.optBoolean("systemTools", false);
+                    boolean systemTools = (route.equals("chat") || route.equals("voice")) && config.optBoolean("systemTools", false);
                     DialogueProtocol.Tools tools = new DialogueProtocol.Tools(imageTool, controlTool, systemTools);
                     List<String> attachments = new ArrayList<>();
                     for (ModelClient.Image image : attached) attachments.add(ImageBridge.dataUrl(image));
@@ -844,7 +855,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
                         XposedHelpers.callMethod(engine, mapping.deliver(), instruction);
                     }
                     if (speak) {
-                        Object tts = XposedHelpers.getStaticObjectField(XposedHelpers.findClass(mapping.tts(), loader), "a");
+                        Object tts = XposedHelpers.getStaticObjectField(XposedHelpers.findClass(mapping.tts(), loader), mapping.ttsSingleton());
                         Class<?> callback = XposedHelpers.findClass(mapping.ttsCallback(), loader);
                         Object listener = Proxy.newProxyInstance(loader, new Class<?>[]{callback}, (proxy, method, args) -> {
                             if (method.getName().equals("hashCode")) return System.identityHashCode(proxy);

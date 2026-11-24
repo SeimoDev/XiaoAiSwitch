@@ -23,7 +23,8 @@ public final class ConfigProvider extends ContentProvider {
         if ("dialogueLayout".equals(method)) {
             var snapshot = LocalHookDiscovery.find(getContext(), true);
             if (snapshot != null) {
-                result.putString("layout", snapshot.layout().encode());
+                if (snapshot.layout() != null) result.putString("layout", snapshot.layout().encode());
+                result.putString("symbols", snapshot.symbols());
                 result.putLong("version", snapshot.version());
                 result.putLong("updatedAt", snapshot.updatedAt());
             }

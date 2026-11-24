@@ -54,6 +54,14 @@ public class CompatibilityTest {
         void deliver(Instruction instruction) {}
     }
     public static class Inherited extends Exact {}
+    public interface VoiceCallback {}
+    public static class RenamedVoice {
+        static final RenamedVoice u = null;
+        String speakTts(String text, VoiceCallback listener, boolean enable) { return text; }
+    }
+    public static class RenamedThinking {
+        static Object generateDialogStateContext() { return null; }
+    }
 
     private static boolean matches(String owner) {
         return new AssistantVersion.Engine(CompatibilityTest.class.getName() + "$" + owner,
@@ -100,12 +108,18 @@ public class CompatibilityTest {
         check(exact != null && exact.exact() && exact.supports(AssistantVersion.Feature.CONTROL),
                 "verified profile lost its native control support");
         var renamed = new AssistantVersion.Engine(Exact.class.getName(), "post", "receive", "deliver", "y", "p31.g", "", "");
-        var dynamic = AssistantVersion.resolveDiscovered("8.2.81.1", renamed, loader,
-                Event.class, Instruction.class, Handler.class);
-        check(dynamic != null && dynamic.discovered() && dynamic.adapter().engine().equals(renamed)
-                && dynamic.features().isEmpty(), "discovered mapping must support text only");
-        check(AssistantVersion.resolveDiscovered("8.2.81.1", renamed, loader,
-                Event.class, null, Handler.class) == null, "discovery skipped runtime signature checks");
+        var dynamic = AssistantVersion.resolveDiscovered("8.2.81.1", renamed, java.util.Map.of(), loader,
+                Event.class, Instruction.class, Handler.class, Context.class);
+        check(dynamic != null && dynamic.discovered() && dynamic.adapter().engine().type().equals(renamed.type())
+                && dynamic.features().equals(java.util.Set.of(AssistantVersion.Feature.QUERY_CARD)), "discovery lost an independently verified feature");
+        check(AssistantVersion.resolveDiscovered("8.2.81.1", renamed, java.util.Map.of(), loader,
+                Event.class, null, Handler.class, Context.class) == null, "discovery skipped runtime signature checks");
+        var relocatedFeatures = AssistantVersion.resolveDiscovered("7.13.30", renamed, java.util.Map.of(
+                "tts", RenamedVoice.class.getName(), "ttsCallback", VoiceCallback.class.getName(), "ttsSingleton", "u",
+                "dialogContext", RenamedThinking.class.getName()), loader,
+                Event.class, Instruction.class, Handler.class, Context.class);
+        check(relocatedFeatures != null && relocatedFeatures.features().equals(java.util.Set.of(
+                AssistantVersion.Feature.VOICE, AssistantVersion.Feature.THINKING)), "renamed feature groups were not independently checked");
         check(AssistantVersion.resolve(508002071L, "9.0.1", loader,
                 Event.class, Instruction.class, Handler.class, Context.class) == null, "9.x was treated as 8.x");
         check(AssistantVersion.resolve(508002071L, "8.2.71", loader,

@@ -36,11 +36,11 @@ final class ReplyMarkdown {
             });
         }
         Class<?> holder = XposedHelpers.findClass("androidx.recyclerview.widget.RecyclerView$ViewHolder", loader);
-        hookCard(loader, holder, mapping.fullCard(), "getText", false, mapping.renderer());
-        hookCard(loader, holder, "com.xiaomi.voiceassistant.instruction.card.stream.b", "getToastText", true, mapping.renderer());
+        hookCard(loader, holder, mapping.fullCard(), "getText", false, mapping);
+        hookCard(loader, holder, mapping.streamedCard(), "getToastText", true, mapping);
     }
 
-    private static void hookCard(ClassLoader loader, Class<?> holder, String name, String getter, boolean flow, String renderer) {
+    private static void hookCard(ClassLoader loader, Class<?> holder, String name, String getter, boolean flow, AssistantVersion.Markdown mapping) {
         XposedHelpers.findAndHookMethod(name, loader, "bindView", Context.class, holder, int.class, new XC_MethodHook() {
             @Override protected void beforeHookedMethod(MethodHookParam param) {
                 TextView target = view(param.args[1], flow);
@@ -55,7 +55,7 @@ final class ReplyMarkdown {
                 XposedHelpers.setAdditionalInstanceField(target, VIEW_OWNER, new WeakReference<>(param.thisObject));
                 if (!owned(param.thisObject)) return;
                 XposedHelpers.setAdditionalInstanceField(param.thisObject, VIEW, new WeakReference<>(target));
-                render(param.thisObject, target, getter, loader, renderer);
+                render(param.thisObject, target, getter, loader, mapping);
             }
         });
         if (!flow) return;
@@ -67,7 +67,7 @@ final class ReplyMarkdown {
                     if (!(stored instanceof WeakReference<?> reference) || !(reference.get() instanceof TextView target)) return;
                     Object owner = XposedHelpers.getAdditionalInstanceField(target, VIEW_OWNER);
                     if (!(owner instanceof WeakReference<?> bound) || bound.get() != param.thisObject) return;
-                    render(param.thisObject, target, getter, loader, renderer);
+                    render(param.thisObject, target, getter, loader, mapping);
                 }
             });
         }
@@ -89,14 +89,14 @@ final class ReplyMarkdown {
         return (String) XposedHelpers.callMethod(card, "getId");
     }
 
-    private static void render(Object card, TextView target, String getter, ClassLoader loader, String rendererClass) {
+    private static void render(Object card, TextView target, String getter, ClassLoader loader, AssistantVersion.Markdown mapping) {
         String text = (String) XposedHelpers.callMethod(card, getter);
         if (!formatted(text)) return;
         try {
             if (XposedHelpers.getAdditionalInstanceField(target, MOVEMENT) == null) {
                 XposedHelpers.setAdditionalInstanceField(target, MOVEMENT, new SavedMovement(target.getMovementMethod()));
             }
-            Object manager = XposedHelpers.getStaticObjectField(XposedHelpers.findClass(rendererClass, loader), "a");
+            Object manager = XposedHelpers.getStaticObjectField(XposedHelpers.findClass(mapping.renderer(), loader), mapping.rendererSingleton());
             Object renderer = XposedHelpers.callMethod(manager, "getMarkwon", target.getContext(), false, false);
             XposedHelpers.callMethod(renderer, "setMarkdown", target, text);
             if (target.getText() instanceof Spanned spanned) {

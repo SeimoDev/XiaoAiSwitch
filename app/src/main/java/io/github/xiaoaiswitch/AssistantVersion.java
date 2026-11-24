@@ -4,15 +4,24 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.EnumSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
 /** Raw DEX symbols for supported assistant builds, not JADX-generated aliases. */
 record AssistantVersion(
         Engine engine, Images images, Markdown markdown, String dialogContext, String thinkingState, String duplexState,
-        boolean phoneControl, ControlBackend controlBackend, String nativeQuery, String queryCardPolicyOwner) {
+        boolean phoneControl, ControlBackend controlBackend, String nativeQuery, String queryCardPolicyOwner,
+        String duplexSingleton, String nativeBuilder, String nativeOrigin) {
     record Engine(String type, String post, String receive, String deliver, String handler,
-                  String session, String tts, String ttsCallback) {
+                  String session, String tts, String ttsCallback, String ttsSingleton) {
+        Engine(String type, String post, String receive, String deliver, String handler, String session, String tts, String ttsCallback) {
+            this(type, post, receive, deliver, handler, session, tts, ttsCallback, "a");
+        }
+
+        Engine withVoice(String voice, String callback, String singleton) {
+            return new Engine(type, post, receive, deliver, handler, session, voice, callback, singleton);
+        }
         boolean matches(ClassLoader loader, Class<?> event, Class<?> instruction, Class<?> handlerType) {
             if (event == null || instruction == null) return false;
             try {
@@ -35,12 +44,35 @@ record AssistantVersion(
         }
     }
 
-    record Images(String producer, String preferences, String gallery, String glide) {
-        String chainOwner() { return producer.equals("sj1.b") ? "dp1.d3" : "zj0.m1"; }
-        String chain() { return producer.equals("sj1.b") ? "ap1.k" : "wj0.j"; }
-        String cacheIndex() { return preferences + (producer.equals("sj1.b") ? "$f0" : "$d0"); }
+    record Images(String producer, String preferences, String gallery, String glide, String chainOwner, String chain,
+                  String cacheIndex, String galleryOpen) {
+        Images(String producer, String preferences, String gallery, String glide) {
+            this(producer, preferences, gallery, glide, producer.equals("sj1.b") ? "dp1.d3" : "zj0.m1",
+                    producer.equals("sj1.b") ? "ap1.k" : "wj0.j", preferences + (producer.equals("sj1.b") ? "$f0" : "$d0"), "g");
+        }
+
+        Images discover(Map<String, String> symbols) {
+            boolean attachment = complete(symbols, "producer", "prefs", "chainOwner", "chain", "cache");
+            boolean drawing = complete(symbols, "gallery", "glide", "galleryOpen");
+            return new Images(attachment ? symbols.get("producer") : producer, attachment ? symbols.get("prefs") : preferences,
+                    drawing ? symbols.get("gallery") : gallery, drawing ? symbols.get("glide") : glide,
+                    attachment ? symbols.get("chainOwner") : chainOwner, attachment ? symbols.get("chain") : chain,
+                    attachment ? symbols.get("cache") : cacheIndex, drawing ? symbols.get("galleryOpen") : galleryOpen);
+        }
     }
-    record Markdown(String operation, String fullCardFactory, String floatingCardFactory, String fullCard, String renderer) {}
+    record Markdown(String operation, String fullCardFactory, String floatingCardFactory, String fullCard, String renderer,
+                    String streamedCard, String rendererSingleton) {
+        Markdown(String operation, String fullCardFactory, String floatingCardFactory, String fullCard, String renderer) {
+            this(operation, fullCardFactory, floatingCardFactory, fullCard, renderer,
+                    "com.xiaomi.voiceassistant.instruction.card.stream.b", "a");
+        }
+
+        Markdown discover(Map<String, String> symbols) {
+            if (!complete(symbols, "markdownOperation", "fullFactory", "floatingFactory", "fullCard", "streamedCard", "renderer", "rendererSingleton")) return this;
+            return new Markdown(symbols.get("markdownOperation"), symbols.get("fullFactory"), symbols.get("floatingFactory"),
+                    symbols.get("fullCard"), symbols.get("renderer"), symbols.get("streamedCard"), symbols.get("rendererSingleton"));
+        }
+    }
     record ControlBackend(String permissions, String scope, String callback, String tasks, String capture, String window, String input) {}
 
     enum Feature {
@@ -62,7 +94,7 @@ record AssistantVersion(
             new Engine("b30.o0", "u0", "y0", "W", "y", "b30.g", "b30.z0", "s10.b"),
             new Images("vf0.a", "m20.z0", "fc0.l1$b", "gb0.a"),
             new Markdown("sd0.od", "g0", "h0", "com.xiaomi.voiceassistant.card.i", "nj0.c"),
-            "com.xiaomi.voiceassist.engine.context.b", "ti0.h", null, true, null, null, null);
+            "com.xiaomi.voiceassist.engine.context.b", "ti0.h", null, true, null, null, null, "a", null, null);
 
     private static final AssistantVersion V8 = new AssistantVersion(
             new Engine("p31.o0", "D0", "H0", "b0", "y", "p31.g", "p31.e1", "g21.a"),
@@ -70,7 +102,8 @@ record AssistantVersion(
             new Markdown("zg1.jf", "i0", "k0", "com.xiaomi.voiceassistant.card.k", "wn1.d"),
             "com.xiaomi.voiceassist.engine.context.j0", "zm1.k", "a41.g", true,
             new ControlBackend("com.xiaomi.voiceassistant.utils.o6", "ws1.b$f", "u62.g", "r21.e", "r21.t",
-                    "com.xiaomi.voiceassistant.utils.ba", "com.xiaomi.voiceassist.baselibrary.utils.h0"), "x51.m0", "p31.y0");
+                    "com.xiaomi.voiceassistant.utils.ba", "com.xiaomi.voiceassist.baselibrary.utils.h0"), "x51.m0", "p31.y0",
+            "a", "x51.m0$e", "com.xiaomi.voiceassistant.utils.p6");
 
     static AssistantVersion forCode(long versionCode) {
         if (versionCode == 507011020L) return V7;
@@ -89,25 +122,44 @@ record AssistantVersion(
         AssistantVersion candidate = family(versionName);
         if (candidate == null || !matchesDialogue(candidate.engine, loader, event, instruction, handler)) return null;
 
-        boolean exact = candidate == forCode(versionCode);
+        return candidate.verify(candidate == forCode(versionCode), false, loader, instruction, context);
+    }
+
+    private Compatibility verify(boolean exact, boolean discovered, ClassLoader loader, Class<?> instruction, Class<?> context) {
         var verified = EnumSet.noneOf(Feature.class);
         for (Feature feature : Feature.values()) {
-            if (candidate.hasMapping(feature) && (exact || probe(() -> candidate.matches(feature, loader, instruction, context)))) {
+            if (hasMapping(feature) && (exact || probe(() -> matches(feature, loader, instruction, context)))) {
                 verified.add(feature);
             }
         }
         // A voice session switched to ASR-only must still be able to return memory commands to the native handler.
-        if (candidate.nativeQuery != null && !verified.contains(Feature.NATIVE_MEMORY)) verified.remove(Feature.VOICE);
+        if (nativeQuery != null && !verified.contains(Feature.NATIVE_MEMORY)) verified.remove(Feature.VOICE);
         if (!verified.contains(Feature.VOICE)) verified.remove(Feature.DUPLEX);
-        return new Compatibility(candidate, exact, false, verified);
+        return new Compatibility(this, exact, discovered, verified);
     }
 
-    static Compatibility resolveDiscovered(String versionName, Engine engine, ClassLoader loader, Class<?> event,
-                                           Class<?> instruction, Class<?> handler) {
+    static Compatibility resolveDiscovered(String versionName, Engine engine, Map<String, String> symbols,
+                                           ClassLoader loader, Class<?> event, Class<?> instruction, Class<?> handler, Class<?> context) {
         AssistantVersion candidate = family(versionName);
         if (candidate == null || !matchesDialogue(engine, loader, event, instruction, handler)) return null;
-        return new Compatibility(new AssistantVersion(engine, candidate.images, candidate.markdown, candidate.dialogContext,
-                candidate.thinkingState, null, false, null, null, null), false, true, Set.of());
+        Engine voice = complete(symbols, "tts", "ttsCallback", "ttsSingleton")
+                ? engine.withVoice(symbols.get("tts"), symbols.get("ttsCallback"), symbols.get("ttsSingleton"))
+                : engine.withVoice(candidate.engine.tts, candidate.engine.ttsCallback, candidate.engine.ttsSingleton);
+        boolean duplex = complete(symbols, "duplex", "duplexSingleton");
+        boolean memory = complete(symbols, "memoryQuery", "memoryBuilder", "memoryOrigin");
+        return new AssistantVersion(voice, candidate.images.discover(symbols), candidate.markdown.discover(symbols),
+                symbols.getOrDefault("dialogContext", candidate.dialogContext), candidate.thinkingState,
+                duplex ? symbols.get("duplex") : candidate.duplexState, false, null,
+                memory ? symbols.get("memoryQuery") : candidate.nativeQuery,
+                symbols.getOrDefault("queryCard", candidate.queryCardPolicyOwner),
+                duplex ? symbols.get("duplexSingleton") : candidate.duplexSingleton,
+                memory ? symbols.get("memoryBuilder") : candidate.nativeBuilder,
+                memory ? symbols.get("memoryOrigin") : candidate.nativeOrigin).verify(false, true, loader, instruction, context);
+    }
+
+    private static boolean complete(Map<String, String> symbols, String... keys) {
+        for (String key : keys) if (!symbols.containsKey(key)) return false;
+        return true;
     }
 
     private static AssistantVersion family(String versionName) {
@@ -127,7 +179,7 @@ record AssistantVersion(
     private boolean hasMapping(Feature feature) {
         return switch (feature) {
             case DUPLEX -> duplexState != null;
-            case NATIVE_MEMORY -> nativeQuery != null;
+            case NATIVE_MEMORY -> nativeQuery != null && nativeBuilder != null && nativeOrigin != null && duplexState != null;
             case CONTROL -> phoneControl;
             case QUERY_CARD -> queryCardPolicyOwner != null;
             default -> true;
@@ -140,22 +192,22 @@ record AssistantVersion(
             case VOICE -> {
                 Class<?> callback = type(loader, engine.ttsCallback);
                 Class<?> tts = type(loader, engine.tts);
-                yield callback.isInterface() && tts.isAssignableFrom(singleton(tts))
+                yield callback.isInterface() && tts.isAssignableFrom(singleton(tts, engine.ttsSingleton))
                         && member(loader, engine.tts, "speakTts", false, String.class, callback, boolean.class) == String.class;
             }
             case DUPLEX -> member(loader, duplexState, "isInContinuousDialog", true) == boolean.class
-                    && member(loader, singleton(type(loader, duplexState)).getName(), "getEventId", false) == String.class;
+                    && member(loader, singleton(type(loader, duplexState), duplexSingleton).getName(), "getEventId", false) == String.class;
             case THINKING -> member(loader, dialogContext, "generateDialogStateContext", true) != void.class;
             case ATTACHMENTS -> member(loader, images.producer, "saveImageLocalPath", false, String.class, String.class) == void.class
                     && member(loader, images.chainOwner(), "setMultiModalChain", false, type(loader, images.chain())) == void.class
                     && member(loader, images.preferences, "getString", true, String.class, String.class) == String.class
                     && member(loader, images.cacheIndex(), "getImageCacheIndex", true, String.class) == String.class;
-            case DRAWING -> member(loader, images.gallery, "g", false, type(loader, "com.xiaomi.ai.api.Template$ImageLauncher")) == void.class
+            case DRAWING -> member(loader, images.gallery, images.galleryOpen, false, type(loader, "com.xiaomi.ai.api.Template$ImageLauncher")) == void.class
                     && member(loader, images.gallery, "init", false, instruction) == void.class
                     && member(loader, images.glide, "with", true, context) != void.class;
             case MARKDOWN -> {
                 Class<?> holder = type(loader, "androidx.recyclerview.widget.RecyclerView$ViewHolder");
-                String streamedCard = "com.xiaomi.voiceassistant.instruction.card.stream.b";
+                String streamedCard = markdown.streamedCard;
                 Class<?> renderer = type(loader, markdown.renderer);
                 yield member(loader, markdown.operation, markdown.fullCardFactory, false, int.class) != void.class
                         && member(loader, markdown.operation, markdown.floatingCardFactory, false, int.class) != void.class
@@ -163,15 +215,15 @@ record AssistantVersion(
                         && member(loader, streamedCard, "bindView", false, context, holder, int.class) == void.class
                         && member(loader, streamedCard, "updateCardText", false, String.class) == void.class
                         && member(loader, streamedCard, "updateToastText", false, String.class) == void.class
-                        && renderer.isAssignableFrom(singleton(renderer))
+                        && renderer.isAssignableFrom(singleton(renderer, markdown.rendererSingleton))
                         && member(loader, markdown.renderer, "getMarkwon", false, context, boolean.class, boolean.class) != void.class;
             }
             case NATIVE_MEMORY -> {
-                String builder = nativeQuery + "$e";
+                String builder = nativeBuilder;
                 type(loader, builder).getDeclaredConstructor();
                 yield member(loader, builder, "setQuery", false, String.class) == type(loader, builder)
                         && member(loader, builder, "setQueryOrigin", false, String.class) == type(loader, builder)
-                        && member(loader, "com.xiaomi.voiceassistant.utils.p6", "getLastQueryOrigin", true) == String.class
+                        && member(loader, nativeOrigin, "getLastQueryOrigin", true) == String.class
                         && member(loader, nativeQuery, "startQuery", true, member(loader, builder, "build", false)) == void.class
                         && member(loader, duplexState, "exitContinuousDialogAndFinishStreamIfNeed", true) == void.class;
             }
@@ -185,8 +237,8 @@ record AssistantVersion(
         return Class.forName(name, false, loader);
     }
 
-    private static Class<?> singleton(Class<?> owner) throws NoSuchFieldException {
-        Field field = owner.getDeclaredField("a");
+    private static Class<?> singleton(Class<?> owner, String name) throws NoSuchFieldException {
+        Field field = owner.getDeclaredField(name);
         if (!Modifier.isStatic(field.getModifiers())) throw new NoSuchFieldException(owner.getName());
         return field.getType();
     }

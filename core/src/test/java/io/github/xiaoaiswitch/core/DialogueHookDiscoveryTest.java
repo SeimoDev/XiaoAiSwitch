@@ -26,6 +26,7 @@ import java.io.FileOutputStream;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -62,6 +63,23 @@ public class DialogueHookDiscoveryTest {
         assertNull(DialogueHookDiscovery.find(List.of(missingRelation)));
         File missingSession = apk("missing-session.apk", "classes.dex", List.of(engine("Lrenamed/engine/A;", true)));
         assertNull(DialogueHookDiscovery.find(List.of(missingSession)));
+    }
+
+    @Test public void featureFingerprintSurvivesRenamesWithoutAcceptingChangedOrAmbiguousCode() throws Exception {
+        var reference = apk("original.apk", "classes.dex", List.of(preview("Loriginal/Q;", "g", "preview")));
+        var rules = FeatureHookDiscovery.rulesFor(List.of(reference), Map.of("gallery", "original.Q", "galleryOpen", "original.Q#m:g"));
+        var renamed = apk("renamed.apk", "classes2.dex", List.of(preview("Lrelocated/B;", "oo", "preview")));
+        assertEquals(Map.of("gallery", "relocated.B", "galleryOpen", "oo"), FeatureHookDiscovery.find(List.of(renamed), rules));
+        var changed = apk("changed.apk", "classes.dex", List.of(preview("Lrelocated/B;", "oo", "unrelated")));
+        assertEquals(Map.of(), FeatureHookDiscovery.find(List.of(changed), rules));
+        var ambiguous = apk("two.apk", "classes.dex", List.of(preview("Lrelocated/B;", "oo", "preview"),
+                preview("Lrelocated/C;", "l", "preview")));
+        assertEquals(Map.of(), FeatureHookDiscovery.find(List.of(ambiguous), rules));
+    }
+
+    private static ImmutableClassDef preview(String owner, String name, String text) {
+        return clazz(owner, List.of(), List.of(method(owner, name, List.of("I"), "Ljava/lang/String;", 0,
+                marker(text), new ImmutableInstruction11x(Opcode.RETURN_OBJECT, 0))));
     }
 
     private File apk(String name, String dexPath, List<ImmutableClassDef> classes) throws Exception {
